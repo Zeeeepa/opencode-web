@@ -1,4 +1,4 @@
-import type { Part } from "../../../../node_modules/@opencode-ai/sdk/dist/gen/types.gen";
+import type { Part } from '@/types/opencode';
 import { Badge } from '../ui';
 
 interface AgentPartProps {
@@ -13,7 +13,7 @@ export function AgentPart({ part }: AgentPartProps) {
   return (
     <div className="flex items-center gap-2 my-2">
       <Badge variant="foreground0" cap="round" className="text-xs">
-        🤖 Agent: {String(agentName || 'Unknown')}
+        Agent: {String(agentName || 'Unknown')}
       </Badge>
     </div>
   );

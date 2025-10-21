@@ -1,5 +1,9 @@
 const OPENCODE_SERVER_URL =
-  import.meta.env.VITE_OPENCODE_SERVER_URL || 'http://localhost:4096'
+  typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_OPENCODE_SERVER_URL
+    ? import.meta.env.VITE_OPENCODE_SERVER_URL
+    : (typeof process !== 'undefined' && process.env?.VITE_OPENCODE_SERVER_URL
+        ? process.env.VITE_OPENCODE_SERVER_URL
+        : 'http://localhost:4096');
 
 function buildUrl(path: string, params?: Record<string, string>): string {
   const url = new URL(path, OPENCODE_SERVER_URL)
@@ -324,24 +328,6 @@ export async function respondToPermission(
   return response.ok
 }
 
-export async function initApp() {
-  const response = await fetch(buildUrl('/app/init'), {
-    method: 'POST',
-  })
-  if (!response.ok) {
-    throw new Error(`Failed to initialize app: ${response.statusText}`)
-  }
-  return response.json()
-}
-
-export async function getAppInfo() {
-  const response = await fetch(buildUrl('/app'))
-  if (!response.ok) {
-    throw new Error(`Failed to get app info: ${response.statusText}`)
-  }
-  return response.json()
-}
-
 export async function getConfig() {
   const response = await fetch(buildUrl('/config'))
   if (!response.ok) {
@@ -459,15 +445,28 @@ export async function showToast(
   title?: string,
   variant?: 'success' | 'error' | 'warning' | 'info',
 ) {
-  const response = await fetch(buildUrl('/tui/show-toast'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title, message, variant }),
-  })
-  if (!response.ok) {
-    throw new Error(`Failed to show toast: ${response.statusText}`)
+  try {
+    const response = await fetch(buildUrl('/tui/show-toast'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, message, variant }),
+    })
+
+    if (!response.ok) {
+      return { ok: false, status: response.status, statusText: response.statusText }
+    }
+
+    const data = await response
+      .json()
+      .catch(() => ({}))
+
+    return { ok: true, data }
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : 'Unknown toast error',
+    }
   }
-  return response.json()
 }
 
 export async function listProjects(directory?: string) {
@@ -503,16 +502,6 @@ export async function listFiles(path: string, directory?: string) {
   const response = await fetch(buildUrl('/file', params))
   if (!response.ok) {
     throw new Error(`Failed to list files: ${response.statusText}`)
-  }
-  return response.json()
-}
-
-export async function readFileContent(filePath: string, directory?: string) {
-  const params: Record<string, string> = { path: filePath }
-  if (directory) params.directory = directory
-  const response = await fetch(buildUrl('/file', params))
-  if (!response.ok) {
-    throw new Error(`Failed to read file content: ${response.statusText}`)
   }
   return response.json()
 }

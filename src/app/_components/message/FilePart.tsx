@@ -1,4 +1,4 @@
-import type { Part } from "../../../../node_modules/@opencode-ai/sdk/dist/gen/types.gen";
+import type { Part } from '@/types/opencode';
 import { Badge } from '../ui';
 
 interface FilePartProps {
@@ -21,7 +21,7 @@ export function FilePart({ part }: FilePartProps) {
     <div className="border border-theme-border rounded-md p-3 bg-theme-background-alt mb-2">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <span>📎</span>
+          <span className="font-mono text-xs">FILE</span>
           <span className="text-sm font-medium">{String(path || 'Unknown file')}</span>
         </div>
         {size !== undefined && (

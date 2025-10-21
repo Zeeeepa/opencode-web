@@ -1,16 +1,90 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { openCodeService, handleOpencodeError } from '@/lib/opencode-client';
+import { OpencodeEvent, SSEConnectionState } from '@/lib/opencode-events';
+import type { FileContentData, Part, PermissionState, SessionTodo } from '@/types/opencode';
 
-// Define Part type locally since the SDK import is broken
-type Part =
-  | { type: 'text'; text: string }
-  | { type: 'reasoning'; content: string; signature?: string }
-  | { type: 'tool'; tool: string; args: Record<string, unknown>; result?: unknown }
-  | { type: 'file'; path: string; content: string }
-  | { type: 'step'; title: string; content: string }
-  | { type: 'patch'; path: string; diff: string }
-  | { type: 'agent'; name: string; description?: string }
-  | { type: 'snapshot'; url: string; description?: string };
+const isDevEnvironment = process.env.NODE_ENV !== 'production';
+
+const BASE64_ENCODING = 'base64';
+const TEXT_LIKE_MIME_SNIPPETS = [
+  'json',
+  'xml',
+  'yaml',
+  'yml',
+  'toml',
+  'csv',
+  'javascript',
+  'typescript',
+  'html',
+  'css',
+  'plain',
+  'markdown',
+  'shell',
+];
+const TEXT_LIKE_EXTENSIONS = new Set([
+  'txt',
+  'text',
+  'md',
+  'markdown',
+  'json',
+  'jsonc',
+  'yaml',
+  'yml',
+  'toml',
+  'xml',
+  'html',
+  'htm',
+  'css',
+  'scss',
+  'sass',
+  'js',
+  'jsx',
+  'ts',
+  'tsx',
+  'cjs',
+  'mjs',
+  'py',
+  'rb',
+  'rs',
+  'go',
+  'java',
+  'c',
+  'cpp',
+  'h',
+  'hpp',
+  'sql',
+  'sh',
+  'bash',
+  'zsh',
+  'env',
+  'lock',
+  'gitignore',
+  'gitattributes',
+]);
+
+const TEXT_LIKE_FILENAMES = new Set([
+  'license',
+  'license.md',
+  'license.txt',
+  'readme',
+  'readme.md',
+  'changelog',
+  'changelog.md',
+  'contributing',
+  'contributing.md',
+  'conduct',
+  'conduct.md',
+  'makefile',
+  'dockerfile',
+  '.gitignore',
+  '.gitattributes',
+  '.editorconfig',
+  'cargo.toml',
+  'package.json',
+  'package-lock.json',
+  'pnpm-lock.yaml',
+  'bun.lock',
+]);
 
    interface Message {
     id: string;
@@ -31,6 +105,9 @@ type Part =
       fileDiffs?: Array<{ path: string; diff: string }>;
       shellLogs?: string[];
     };
+    optimistic?: boolean;
+    error?: boolean;
+    errorMessage?: string;
   }
 
   interface OpenCodeMessage {
@@ -131,15 +208,20 @@ type Part =
    }
 
 export function useOpenCode() {
-    const [currentSession, setCurrentSession] = useState<Session | null>(null);
-    const [messages, setMessages] = useState<Message[]>([]);
-    const [loading, setLoading] = useState(false);
-    const [sessions, setSessions] = useState<Session[]>([]);
-     const [projects, setProjects] = useState<Project[]>([]);
-     const [currentProject, setCurrentProject] = useState<Project | null>(null);
-      const [files, setFiles] = useState<FileInfo[]>([]);
-      const [fileDirectory, setFileDirectory] = useState<string>('.');
-     const [models, setModels] = useState<Model[]>([]);
+     const [currentSession, setCurrentSession] = useState<Session | null>(null);
+     const [messages, setMessages] = useState<Message[]>([]);
+     const [loading, setLoading] = useState(false);
+     const [sessions, setSessions] = useState<Session[]>([]);
+      const [projects, setProjects] = useState<Project[]>([]);
+      const [currentProject, setCurrentProject] = useState<Project | null>(null);
+       const [files, setFiles] = useState<FileInfo[]>([]);
+       const [fileDirectory, setFileDirectory] = useState<string>('.');
+      const [models, setModels] = useState<Model[]>([]);
+
+      // Permission and todo state
+      const [currentPermission, setCurrentPermission] = useState<PermissionState | null>(null);
+      const [shouldBlurEditor, setShouldBlurEditor] = useState(false);
+      const [currentSessionTodos, setCurrentSessionTodos] = useState<SessionTodo[]>([]);
 
       const [selectedModel, setSelectedModel] = useState<Model | null>(null);
       const [config, setConfig] = useState<Config | null>(null);
@@ -156,8 +238,9 @@ export function useOpenCode() {
        const [showThemes, setShowThemes] = useState(false);
        const [showOnboarding, setShowOnboarding] = useState(false);
        const [showModelPicker, setShowModelPicker] = useState(false);
-        const [isConnected, setIsConnected] = useState<boolean | null>(null);
-        const [customCommands, setCustomCommands] = useState<Array<{ name: string; description: string; template: string }>>([]);
+         const [isConnected, setIsConnected] = useState<boolean | null>(null);
+         const [sseConnectionState, setSseConnectionState] = useState<SSEConnectionState | null>(null);
+         const [customCommands, setCustomCommands] = useState<Array<{ name: string; description: string; template: string }>>([]);
         const [agents, setAgents] = useState<Agent[]>([]);
         const [currentAgent, setCurrentAgent] = useState<Agent | null>(null);
         const [isHydrated, setIsHydrated] = useState(false);
@@ -168,6 +251,55 @@ export function useOpenCode() {
         const loadedAgentsRef = useRef(false);
         const loadedProjectsRef = useRef(false);
         const loadedSessionsRef = useRef(false);
+        const seenMessageIdsRef = useRef<Set<string>>(new Set());
+        const currentSessionRef = useRef<Session | null>(null);
+
+        useEffect(() => {
+          currentSessionRef.current = currentSession;
+        }, [currentSession]);
+
+  const normalizeProject = useCallback((project: unknown): Project | null => {
+    if (!project || typeof project !== 'object') return null;
+    const value = project as {
+      id?: string;
+      worktree?: string;
+      vcs?: string;
+      createdAt?: unknown;
+      updatedAt?: unknown;
+      time?: { created?: number; updated?: number };
+    };
+    if (!value.id || !value.worktree) return null;
+    const toDate = (input?: unknown) => {
+      if (!input) return undefined;
+      if (input instanceof Date) return input;
+      if (typeof input === 'number') {
+        const dateFromNumber = new Date(input);
+        return Number.isNaN(dateFromNumber.getTime()) ? undefined : dateFromNumber;
+      }
+      if (typeof input === 'string') {
+        const dateFromString = new Date(input);
+        return Number.isNaN(dateFromString.getTime()) ? undefined : dateFromString;
+      }
+      return undefined;
+    };
+    const created =
+      toDate(value.createdAt) ??
+      (typeof value.time?.created === 'number'
+        ? toDate(value.time.created * 1000)
+        : undefined);
+    const updated =
+      toDate(value.updatedAt) ??
+      (typeof value.time?.updated === 'number'
+        ? toDate(value.time.updated * 1000)
+        : undefined);
+    return {
+      id: value.id,
+      worktree: value.worktree,
+      vcs: value.vcs,
+      createdAt: created,
+      updatedAt: updated,
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -175,9 +307,12 @@ export function useOpenCode() {
     const savedProjectStr = localStorage.getItem('opencode-current-project');
     if (savedProjectStr) {
       try {
-        const savedProject = JSON.parse(savedProjectStr);
-        console.log('[Hydration] Restoring project from localStorage:', savedProject);
-        setCurrentProject(savedProject);
+        const parsedProject = JSON.parse(savedProjectStr);
+        const savedProject = normalizeProject(parsedProject);
+        if (process.env.NODE_ENV !== 'production') console.log('[Hydration] Restoring project from localStorage:', savedProject);
+        if (savedProject) {
+          setCurrentProject(savedProject);
+        }
       } catch (error) {
         console.error('[Hydration] Error parsing saved project:', error);
       }
@@ -185,7 +320,7 @@ export function useOpenCode() {
 
     const savedSessionId = localStorage.getItem('opencode-current-session');
     if (savedSessionId) {
-      console.log('[Hydration] Restoring session from localStorage:', savedSessionId);
+      if (process.env.NODE_ENV !== 'production') console.log('[Hydration] Restoring session from localStorage:', savedSessionId);
       
       const savedProjectStr = localStorage.getItem('opencode-current-project');
       let projectDirectory: string | undefined;
@@ -233,12 +368,12 @@ export function useOpenCode() {
               };
             });
             setMessages(loadedMessages);
-            console.log('[Hydration] Loaded messages for session:', loadedMessages.length);
+            if (process.env.NODE_ENV !== 'production') console.log('[Hydration] Loaded messages for session:', loadedMessages.length);
           } catch (error) {
             console.error('[Hydration] Error loading messages:', error);
           }
         } else {
-          console.log('[Hydration] Session not found on server, clearing localStorage');
+          if (process.env.NODE_ENV !== 'production') console.log('[Hydration] Session not found on server, clearing localStorage');
           localStorage.removeItem('opencode-current-session');
         }
       }).catch((error) => {
@@ -251,7 +386,7 @@ export function useOpenCode() {
     if (savedModelStr) {
       try {
         const savedModel = JSON.parse(savedModelStr);
-        console.log('[Hydration] Restoring model from localStorage:', savedModel);
+        if (process.env.NODE_ENV !== 'production') console.log('[Hydration] Restoring model from localStorage:', savedModel);
         setSelectedModel(savedModel);
       } catch (error) {
         console.error('[Hydration] Error parsing saved model:', error);
@@ -262,7 +397,7 @@ export function useOpenCode() {
     if (savedAgentStr) {
       try {
         const savedAgent = JSON.parse(savedAgentStr);
-        console.log('[Hydration] Restoring agent from localStorage:', savedAgent);
+        if (process.env.NODE_ENV !== 'production') console.log('[Hydration] Restoring agent from localStorage:', savedAgent);
         setCurrentAgent(savedAgent);
       } catch (error) {
         console.error('[Hydration] Error parsing saved agent:', error);
@@ -273,7 +408,7 @@ export function useOpenCode() {
     if (savedSessionModelMapStr) {
       try {
         const savedMap = JSON.parse(savedSessionModelMapStr);
-        console.log('[Hydration] Restoring session-model map from localStorage:', savedMap);
+        if (process.env.NODE_ENV !== 'production') console.log('[Hydration] Restoring session-model map from localStorage:', savedMap);
         setSessionModelMap(savedMap);
       } catch (error) {
         console.error('[Hydration] Error parsing saved session-model map:', error);
@@ -283,11 +418,11 @@ export function useOpenCode() {
     const savedActiveTab = localStorage.getItem('opencode-active-tab');
     const savedSelectedFile = localStorage.getItem('opencode-selected-file');
     if (savedActiveTab || savedSelectedFile) {
-      console.log('[Hydration] Restoring tab/file state from localStorage:', { savedActiveTab, savedSelectedFile });
+      if (process.env.NODE_ENV !== 'production') console.log('[Hydration] Restoring tab/file state from localStorage:', { savedActiveTab, savedSelectedFile });
     }
     
     setIsHydrated(true);
-  }, []);
+  }, [normalizeProject]);
 
     useEffect(() => {
      const checkConnection = async () => {
@@ -301,6 +436,480 @@ export function useOpenCode() {
      checkConnection();
    }, []);
 
+  const showToast = useCallback(
+    async (message: string, variant: 'success' | 'error' | 'warning' | 'info' = 'info') => {
+      const result = await openCodeService.showToast(message, undefined, variant)
+      if (result?.error) {
+        console.error('[Toast] Falling back to console:', result.error)
+      }
+    },
+    [],
+  )
+
+  const loadMessages = useCallback(
+    async (sessionId: string): Promise<Message[]> => {
+      try {
+        const response = await openCodeService.getMessages(sessionId, currentProject?.worktree);
+        const messagesArray = (response.data as unknown as OpenCodeMessage[]) || [];
+        const loadedMessages: Message[] = messagesArray.map((msg: OpenCodeMessage, index: number) => {
+          const parts = msg.parts || [];
+          const textPart = parts.find((part: Part) => part.type === 'text');
+          const content = (textPart && 'text' in textPart ? textPart.text : '') || '';
+
+          const errorInfo = (msg.info as { error?: unknown })?.error;
+          const errorMessage =
+            typeof (errorInfo as { message?: string })?.message === 'string'
+              ? (errorInfo as { message: string }).message
+              : undefined;
+
+          return {
+            id: msg.info?.id || `msg-${index}`,
+            type: msg.info?.role === 'user' ? 'user' : 'assistant',
+            content,
+            parts,
+            timestamp: new Date(msg.info?.time?.created || Date.now()),
+            reverted: msg.info?.reverted || false,
+            metadata:
+              'tokens' in (msg.info || {})
+                ? {
+                    tokens: (msg.info as { tokens?: { input: number; output: number; reasoning: number } }).tokens,
+                    cost: (msg.info as { cost?: number }).cost,
+                    model: (msg.info as { modelID?: string }).modelID,
+                    agent: (msg.info as { mode?: string }).mode,
+                  }
+                : undefined,
+            optimistic: false,
+            error: Boolean(errorInfo),
+            errorMessage,
+          };
+        });
+
+        const activeMessages = loadedMessages.filter(msg => !msg.reverted);
+        const totalTokens = activeMessages.reduce((sum, msg) => {
+          if (msg.metadata?.tokens) {
+            return sum + msg.metadata.tokens.input + msg.metadata.tokens.output + msg.metadata.tokens.reasoning;
+          }
+          return sum;
+        }, 0);
+        if (process.env.NODE_ENV !== 'production')
+          console.log(
+            '[LoadMessages] Loaded',
+            loadedMessages.length,
+            'messages (',
+            activeMessages.length,
+            'active,',
+            loadedMessages.length - activeMessages.length,
+            'reverted) with',
+            totalTokens,
+            'total tokens',
+          );
+
+        seenMessageIdsRef.current.clear();
+        loadedMessages.forEach(msg => seenMessageIdsRef.current.add(msg.id));
+        setMessages(loadedMessages);
+
+        const lastAssistantMessage = [...loadedMessages]
+          .reverse()
+          .find(msg => msg.type === 'assistant' && msg.metadata?.model);
+        if (lastAssistantMessage?.metadata?.model && models.length > 0) {
+          const modelId = lastAssistantMessage.metadata.model;
+          const [providerId, modelName] = modelId.includes('/') ? modelId.split('/') : [modelId, modelId];
+
+          const matchingModel = models.find(
+            m =>
+              m.modelID === modelName ||
+              m.modelID === modelId ||
+              (m.providerID === providerId && m.modelID === modelName),
+          );
+
+          if (matchingModel) {
+            setSessionModelMap(prev => ({
+              ...prev,
+              [sessionId]: matchingModel,
+            }));
+          }
+        }
+
+        return loadedMessages;
+      } catch {
+        return [];
+      }
+    },
+    [currentProject, models],
+  );
+
+  const currentSessionId = currentSession?.id;
+  const currentWorktree = currentProject?.worktree;
+
+  // SSE Event handling for real-time message updates
+  useEffect(() => {
+    if (!isConnected || !currentSessionId || !isHydrated) return;
+
+    const debugLog = (...args: unknown[]) => {
+      if (process.env.NODE_ENV !== 'production') console.log(...args)
+    }
+
+    const getEventSessionId = (event: OpencodeEvent): string | undefined => {
+      const maybeSessionId = (event.properties as { sessionID?: unknown }).sessionID
+      return typeof maybeSessionId === 'string' ? maybeSessionId : undefined
+    }
+
+    const handleSSEEvent = (event: OpencodeEvent) => {
+      const activeSession = currentSessionRef.current;
+      if (event.type !== 'lsp.client.diagnostics') {
+        debugLog('[SSE] Event received:', event.type)
+      }
+
+      const eventSessionId = getEventSessionId(event)
+      if (eventSessionId && activeSession?.id && eventSessionId !== activeSession.id) {
+        debugLog('[SSE] Ignoring event for different session', {
+          eventSessionId,
+          currentSessionId: activeSession?.id,
+        })
+        return
+      }
+
+      switch (event.type) {
+        case 'server.connected': {
+          debugLog('[SSE] Server connected')
+          break
+        }
+
+        case 'installation.updated': {
+          const { version } = event.properties
+          if (version) {
+            showToast(`OpenCode updated to ${version}, restart to apply`, 'success')
+          }
+          break
+        }
+
+        case 'ide.installed': {
+          const { ide } = event.properties
+          if (ide) {
+            showToast(`${ide} extension installed successfully`, 'success')
+          }
+          break
+        }
+
+        case 'session.updated': {
+          const sessionInfo = event.properties.info
+          if (sessionInfo && activeSession?.id === sessionInfo.id) {
+            setCurrentSession(prev => (prev?.id === sessionInfo.id ? { ...prev, ...sessionInfo } : prev))
+          }
+          break
+        }
+
+        case 'session.deleted': {
+          const sessionInfo = event.properties.info
+          if (sessionInfo && activeSession?.id === sessionInfo.id) {
+            setCurrentSession(null)
+            setMessages([])
+            seenMessageIdsRef.current.clear()
+            showToast('Session was deleted', 'info')
+          }
+          break
+        }
+
+        case 'session.compacted': {
+          if (event.properties.sessionID === activeSession?.id) {
+            showToast('Session compacted successfully', 'success')
+          }
+          break
+        }
+
+        case 'session.idle': {
+          debugLog('[SSE] Session became idle')
+          const sessionId = event.properties.sessionID
+          if (sessionId && sessionId === activeSession?.id) {
+            loadMessages(sessionId).catch(error => {
+              console.error('[SSE] Failed to refresh messages after idle:', error)
+            })
+          }
+          break
+        }
+
+        case 'session.error': {
+          const { error } = event.properties
+          if (error) {
+            showToast(error.message, 'error')
+          }
+          const sessionId = event.properties.sessionID
+          if (sessionId && sessionId === activeSession?.id) {
+            loadMessages(sessionId).catch(loadError => {
+              console.error('[SSE] Failed to refresh messages after session error:', loadError)
+            })
+          }
+          break
+        }
+
+        case 'message.updated': {
+          const messageInfo = event.properties.info
+
+          if (!messageInfo?.id) {
+            debugLog('[SSE] Skipping message event - no message id')
+            return
+          }
+
+          setMessages(prevMessages => {
+            const existingIndex = prevMessages.findIndex(m => m.id === messageInfo.id)
+            const errorInfo = (messageInfo as {
+              error?: { data?: { message?: string }; message?: string }
+            }).error
+            const errorMessage =
+              typeof errorInfo?.data?.message === 'string'
+                ? errorInfo.data.message
+                : typeof errorInfo?.message === 'string'
+                  ? errorInfo.message
+                  : undefined
+
+            if (existingIndex >= 0) {
+              const updated = [...prevMessages]
+              updated[existingIndex] = {
+                ...updated[existingIndex],
+                reverted: messageInfo.reverted ?? updated[existingIndex].reverted,
+                metadata: messageInfo.tokens
+                  ? {
+                      tokens: messageInfo.tokens,
+                      cost: messageInfo.cost,
+                      model: messageInfo.modelID,
+                      agent: messageInfo.mode,
+                  }
+                  : updated[existingIndex].metadata,
+                optimistic: false,
+                error: Boolean(errorInfo),
+                errorMessage,
+              }
+
+              debugLog('[SSE] Updated message metadata:', messageInfo.id)
+              seenMessageIdsRef.current.add(messageInfo.id)
+              return updated
+            }
+
+            const optimisticIndex = prevMessages.findIndex(
+              m => m.optimistic && m.type === (messageInfo.role === 'user' ? 'user' : 'assistant'),
+            )
+
+            if (optimisticIndex >= 0) {
+              const updated = [...prevMessages]
+              updated[optimisticIndex] = {
+                ...updated[optimisticIndex],
+                id: messageInfo.id,
+                timestamp: new Date(messageInfo.time?.created || Date.now()),
+                reverted: messageInfo.reverted || false,
+                metadata: messageInfo.tokens
+                  ? {
+                      tokens: messageInfo.tokens,
+                      cost: messageInfo.cost,
+                      model: messageInfo.modelID,
+                      agent: messageInfo.mode,
+                    }
+                  : updated[optimisticIndex].metadata,
+                optimistic: false,
+                error: Boolean(errorInfo),
+                errorMessage,
+              }
+
+              seenMessageIdsRef.current.add(messageInfo.id)
+              debugLog('[SSE] Matched optimistic message with server ID:', messageInfo.id)
+              return updated
+            }
+
+            if (seenMessageIdsRef.current.has(messageInfo.id)) {
+              debugLog('[SSE] Skipping duplicate message creation:', messageInfo.id)
+              return prevMessages
+            }
+
+            seenMessageIdsRef.current.add(messageInfo.id)
+
+            const newMessage: Message = {
+              id: messageInfo.id,
+              type: messageInfo.role === 'user' ? 'user' : 'assistant',
+              content: '',
+              parts: [],
+              timestamp: new Date(messageInfo.time?.created || Date.now()),
+              reverted: messageInfo.reverted || false,
+              metadata: messageInfo.tokens
+                ? {
+                    tokens: messageInfo.tokens,
+                    cost: messageInfo.cost,
+                    model: messageInfo.modelID,
+                    agent: messageInfo.mode,
+                  }
+                : undefined,
+              optimistic: false,
+              error: Boolean(errorInfo),
+              errorMessage,
+            }
+
+            const newMessages = [...prevMessages, newMessage]
+            newMessages.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
+
+            debugLog('[SSE] Added new message placeholder:', messageInfo.id)
+            return newMessages
+          })
+          break
+        }
+
+        case 'message.removed': {
+          const { messageID } = event.properties
+          if (messageID) {
+            setMessages(prevMessages => prevMessages.filter(msg => msg.id !== messageID))
+            debugLog('[SSE] Removed message:', messageID)
+          }
+          break
+        }
+
+        case 'message.part.updated': {
+          const { part, messageID } = event.properties
+          const targetMessageId = typeof part?.messageID === 'string' ? part.messageID : messageID
+
+          if (!part || !targetMessageId) {
+            debugLog('[SSE] Skipping part update - missing message ID or part')
+            return
+          }
+
+          setMessages(prevMessages =>
+            prevMessages.map(msg => {
+              if (msg.id !== targetMessageId) return msg
+
+              const parts = msg.parts || []
+              const textContent = typeof part.text === 'string' ? part.text : ''
+
+              if (part.type === 'text') {
+                const textPartIndex = parts.findIndex(p => p.type === 'text')
+                if (textPartIndex >= 0) {
+                  const updatedParts = [...parts]
+                  updatedParts[textPartIndex] = part
+                  debugLog('[SSE] Updated text part for message:', msg.id, 'length:', textContent.length)
+                  return { ...msg, parts: updatedParts, content: textContent, optimistic: false, error: false, errorMessage: undefined }
+                }
+
+                debugLog('[SSE] Added new text part for message:', msg.id, 'length:', textContent.length)
+                return { ...msg, parts: [...parts, part], content: textContent, optimistic: false, error: false, errorMessage: undefined }
+              }
+
+              const existingPartIndex = parts.findIndex(p => {
+                if (p.type !== part.type) return false
+                const currentTool = typeof p.tool === 'string' ? p.tool : null
+                const incomingTool = typeof part.tool === 'string' ? part.tool : null
+                if (currentTool && incomingTool) {
+                  return currentTool === incomingTool
+                }
+                return true
+              })
+
+              if (existingPartIndex >= 0) {
+                const updatedParts = [...parts]
+                updatedParts[existingPartIndex] = part
+                debugLog('[SSE] Updated part type:', part.type, 'for message:', msg.id)
+                return { ...msg, parts: updatedParts, optimistic: false, error: false, errorMessage: undefined }
+              }
+
+              debugLog('[SSE] Added new part type:', part.type, 'for message:', msg.id)
+              return { ...msg, parts: [...parts, part], optimistic: false, error: false, errorMessage: undefined }
+            }),
+          )
+          break
+        }
+
+        case 'message.part.removed': {
+          const { messageID, partID } = event.properties
+          if (messageID && partID) {
+            setMessages(prevMessages =>
+              prevMessages.map(msg =>
+                msg.id === messageID
+                  ? { ...msg, parts: msg.parts?.filter((_, index) => index.toString() !== partID) || [] }
+                  : msg,
+              ),
+            )
+            debugLog('[SSE] Removed part:', partID, 'from message:', messageID)
+          }
+          break
+        }
+
+        case 'permission.updated': {
+          const { id, sessionID, message, details, ...rest } = event.properties
+          if (sessionID === activeSession?.id) {
+            const permissionPayload: PermissionState = {
+              id,
+              sessionID,
+              message,
+              details,
+              ...rest,
+            }
+            setCurrentPermission(permissionPayload)
+            setShouldBlurEditor(true)
+            debugLog('[SSE] Permission request received:', id)
+          }
+          break
+        }
+
+        case 'permission.replied': {
+          const { permissionID, sessionID } = event.properties
+          if (sessionID === activeSession?.id) {
+            setCurrentPermission(null)
+            setShouldBlurEditor(false)
+            debugLog('[SSE] Permission response received:', permissionID)
+          }
+          break
+        }
+
+        case 'file.edited': {
+          const { file } = event.properties
+          if (file) {
+            debugLog('[SSE] File edited:', file)
+          }
+          break
+        }
+
+        case 'file.watcher.updated': {
+          const { file, event: fileEvent } = event.properties
+          if (file && fileEvent) {
+            debugLog('[SSE] File watcher update:', file, fileEvent)
+          }
+          break
+        }
+
+        case 'todo.updated': {
+          const { sessionID, todos } = event.properties
+          if (sessionID === activeSession?.id && Array.isArray(todos)) {
+            setCurrentSessionTodos(todos)
+            debugLog('[SSE] Todo items updated for session:', sessionID)
+          }
+          break
+        }
+
+        case 'lsp.client.diagnostics': {
+          break
+        }
+      }
+    }
+
+    const setupSSE = async () => {
+      const directory = currentWorktree
+      const { data: connectionState } = await openCodeService.subscribeToEvents(
+        currentSessionId,
+        handleSSEEvent,
+        directory,
+      )
+      setSseConnectionState(connectionState)
+    }
+
+    setupSSE()
+
+    const connectionMonitor = setInterval(() => {
+      const currentState = openCodeService.getConnectionState()
+      setSseConnectionState(currentState)
+    }, 1000)
+
+    return () => {
+      clearInterval(connectionMonitor)
+      debugLog('[SSE] Cleaning up event subscription')
+      openCodeService.unsubscribeFromEvents()
+      setSseConnectionState(null)
+    }
+  }, [isConnected, currentSessionId, isHydrated, currentWorktree, showToast, loadMessages])
+
 
 
 
@@ -309,10 +918,10 @@ export function useOpenCode() {
   useEffect(() => {
     if (!isHydrated) return;
     if (currentSession) {
-      console.log('Saving session to localStorage:', currentSession.id);
+      if (process.env.NODE_ENV !== 'production') console.log('Saving session to localStorage:', currentSession.id);
       localStorage.setItem('opencode-current-session', currentSession.id);
     } else {
-      console.log('Clearing session from localStorage');
+      if (process.env.NODE_ENV !== 'production') console.log('Clearing session from localStorage');
       localStorage.removeItem('opencode-current-session');
     }
   }, [currentSession, isHydrated]);
@@ -345,48 +954,116 @@ export function useOpenCode() {
   useEffect(() => {
     if (!isHydrated) return;
     if (currentProject) {
-      console.log('Saving project to localStorage:', currentProject);
+      if (process.env.NODE_ENV !== 'production') console.log('Saving project to localStorage:', currentProject);
       localStorage.setItem('opencode-current-project', JSON.stringify(currentProject));
     } else {
-      console.log('Clearing project from localStorage');
+      if (process.env.NODE_ENV !== 'production') console.log('Clearing project from localStorage');
       localStorage.removeItem('opencode-current-project');
     }
   }, [currentProject, isHydrated]);
 
-   const createSession = useCallback(async ({ title, directory }: { title?: string; directory?: string } = {}) => {
-     try {
-       setLoading(true);
-       const sessionDirectory = directory || currentProject?.worktree;
+  const createSession = useCallback(
+    async ({ title, directory }: { title?: string; directory?: string } = {}) => {
+      try {
+        setLoading(true);
+        const sessionDirectory = directory?.trim() || currentProject?.worktree;
         const response = await openCodeService.createSession({ title, directory: sessionDirectory });
         if (response.error) {
           throw new Error(response.error);
         }
-        const session = response.data as unknown as { id: string; title?: string; directory?: string; projectID?: string; createdAt?: string | number; updatedAt?: string | number } | undefined;
+        const session = response.data as unknown as {
+          id: string;
+          title?: string;
+          directory?: string;
+          projectID?: string;
+          createdAt?: string | number;
+          updatedAt?: string | number;
+        } | undefined;
         if (!session) {
           throw new Error('Failed to create session');
         }
+
+        const derivedDirectory = sessionDirectory || session.directory;
+        const projectId = session.projectID;
+
         const newSession: Session = {
           id: session.id,
           title: title || session.title,
-          directory: sessionDirectory || session.directory,
-           projectID: session.projectID || currentProject?.id,
+          directory: derivedDirectory || session.directory,
+          projectID: projectId || currentProject?.id,
           createdAt: session.createdAt ? new Date(session.createdAt) : new Date(),
           updatedAt: session.updatedAt ? new Date(session.updatedAt) : undefined,
         };
-        setCurrentSession(newSession);
-        setSessions(prev => [newSession, ...prev]);
-        setMessages([]);
-        return newSession;
-     } catch (error) {
-       console.error('Failed to create session:', error);
-       throw new Error(handleOpencodeError(error));
-     } finally {
-       setLoading(false);
-     }
-   }, [currentProject]);
 
-     const sendMessage = useCallback(async (content: string, providerID?: string, modelID?: string) => {
-      if (!currentSession) {
+        let updatedProjects = projects;
+
+        if (projectId || derivedDirectory) {
+          try {
+            const projectsResponse = await openCodeService.listProjects();
+            if (projectsResponse.error) {
+              throw new Error(projectsResponse.error);
+            }
+            const data = projectsResponse.data || [];
+            const fetchedProjects: Project[] = (Array.isArray(data) ? data : []).map((project: ProjectResponse) => ({
+              id: project.id,
+              worktree: project.worktree,
+              vcs: project.vcs,
+              createdAt: project.time?.created ? new Date(project.time.created * 1000) : undefined,
+              updatedAt: project.time?.updated ? new Date(project.time.updated * 1000) : undefined,
+            }));
+            const mergedProjects = new Map<string, Project>();
+            projects.forEach((project) => mergedProjects.set(project.id, project));
+            fetchedProjects.forEach((project) => mergedProjects.set(project.id, project));
+            const mergedProjectList = Array.from(mergedProjects.values());
+            setProjects(mergedProjectList);
+            loadedProjectsRef.current = true;
+            updatedProjects = mergedProjectList;
+          } catch (projectError) {
+            console.error('Failed to refresh projects after session creation:', projectError);
+          }
+        }
+
+        const targetProject =
+          (projectId && updatedProjects.find((project) => project.id === projectId)) ||
+          (derivedDirectory && updatedProjects.find((project) => project.worktree === derivedDirectory)) ||
+          (projectId && projects.find((project) => project.id === projectId)) ||
+          (derivedDirectory && projects.find((project) => project.worktree === derivedDirectory)) ||
+          currentProject ||
+          null;
+
+        if (targetProject?.id && targetProject.id !== newSession.projectID) {
+          newSession.projectID = targetProject.id;
+        }
+
+        const isSwitchingProjects =
+          Boolean(targetProject?.id) && targetProject?.id !== currentProject?.id;
+
+        if (isSwitchingProjects && targetProject) {
+          const normalizedTarget = normalizeProject(targetProject) ?? targetProject;
+          setCurrentProject(normalizedTarget);
+          setSessions([newSession]);
+          loadedSessionsRef.current = false;
+        } else {
+          setSessions((prev) => [newSession, ...prev]);
+        }
+
+        setCurrentSession(newSession);
+        setMessages([]);
+        seenMessageIdsRef.current.clear();
+        return newSession;
+      } catch (error) {
+        console.error('Failed to create session:', error);
+        throw new Error(handleOpencodeError(error));
+      } finally {
+        setLoading(false);
+      }
+    },
+    [currentProject, normalizeProject, projects],
+  );
+
+     const sendMessage = useCallback(async (content: string, providerID?: string, modelID?: string, sessionOverride?: Session) => {
+      const targetSession = sessionOverride || currentSession;
+      if (!targetSession) {
         throw new Error('No active session');
       }
 
@@ -401,8 +1078,8 @@ export function useOpenCode() {
             const filePath = match.slice(1);
             try {
               const fileContent = await readFile(filePath);
-              if (fileContent) {
-                expandedContent += `\n\nFile: ${filePath}\n${fileContent}`;
+              if (fileContent?.text) {
+                expandedContent += `\n\nFile: ${filePath}\n${fileContent.text}`;
               }
             } catch (error) {
               console.error('Failed to read file for expansion:', error);
@@ -410,66 +1087,71 @@ export function useOpenCode() {
           }
         }
 
-        // Add user message to local state
-        const userMessage: Message = {
-          id: `user-${Date.now()}`,
-          type: 'user',
-          content: expandedContent,
-          timestamp: new Date(),
-        };
-        setMessages(prev => [...prev, userMessage]);
+         // For now, use non-streaming; implement streaming later
+         const response = await openCodeService.sendMessage(
+           targetSession.id, 
+           content, 
+           providerID, 
+           modelID,
+           currentProject?.worktree
+         );
+         
+         if (response.error) {
+           if (response.error.includes('ENOENT') || response.error.includes('no such file')) {
+             throw new Error('Session not found on server. Please create a new session.');
+           }
+           throw new Error(response.error);
+         }
 
-        // For now, use non-streaming; implement streaming later
-        const response = await openCodeService.sendMessage(
-          currentSession.id, 
-          content, 
-          providerID, 
-          modelID,
-          currentProject?.worktree
-        );
-        if (response.error) {
-          if (response.error.includes('ENOENT') || response.error.includes('no such file')) {
-            throw new Error('Session not found on server. Please create a new session.');
-          }
-          throw new Error(response.error);
-        }
-        if (response.error) {
-          throw new Error(response.error);
-        }
-        const data = response.data as unknown as { info?: {id?: string; tokens?: {input: number; output: number; reasoning: number}; cost?: number; modelID?: string; mode?: string}; parts?: Part[] } | undefined;
-        if (!data) {
-          throw new Error('No response data');
-        }
+         // The response contains the message object - extract ID from info
+         const responseData = response.data as { info?: { id?: string } };
+         const messageId = responseData?.info?.id;
+         
+         if (!messageId) {
+           console.warn('[SendMessage] No message ID in response, SSE will handle updates');
+           // Don't throw error - SSE events will populate the message
+           return;
+         }
 
-        // Add assistant response to local state
-        const parts = data.parts || [];
-        const textPart = parts.find((part: Part) => part.type === 'text');
-        const content_text = (textPart && 'text' in textPart ? textPart.text : '') || 'No response content';
-        
-        const assistantMessage: Message = {
-          id: data.info?.id || `assistant-${Date.now()}`,
-          type: 'assistant',
-          content: content_text,
-          parts,
-          timestamp: new Date(),
-          metadata: {
-            tokens: data.info?.tokens,
-            cost: data.info?.cost,
-            model: data.info?.modelID,
-            agent: data.info?.mode
-          }
-        };
-        setMessages(prev => [...prev, assistantMessage]);
+         // Update optimistic entry with authoritative message ID and any expanded content
+         setMessages(prev => {
+           const updated = [...prev];
+           const optimisticIndex = updated.length - 1;
+           if (
+             optimisticIndex >= 0 &&
+             updated[optimisticIndex]?.type === 'user' &&
+             'optimistic' in updated[optimisticIndex]
+           ) {
+             updated[optimisticIndex] = {
+               ...updated[optimisticIndex],
+               id: messageId,
+               content: expandedContent,
+               optimistic: false,
+             };
+           } else {
+             updated.push({
+               id: messageId,
+               type: 'user',
+               content: expandedContent,
+               timestamp: new Date(),
+             });
+           }
+           return updated;
+         });
 
-        // Save the model used for this session
-        if (selectedModel && currentSession) {
-          setSessionModelMap(prev => ({
-            ...prev,
-            [currentSession.id]: selectedModel
-          }));
-        }
+         // Save the model used for this session
+         if (selectedModel && targetSession) {
+           setSessionModelMap(prev => ({
+             ...prev,
+             [targetSession.id]: selectedModel
+           }));
+         }
 
-        return assistantMessage;
+         // Return the user message - SSE will handle the assistant response
+         return {
+           id: messageId,
+           content: expandedContent,
+         };
       } catch (error) {
         console.error('Failed to send message:', error);
         throw new Error(handleOpencodeError(error));
@@ -477,70 +1159,6 @@ export function useOpenCode() {
          setLoading(false);
        }
        }, [currentSession, currentProject, selectedModel]); // eslint-disable-line react-hooks/exhaustive-deps
-
-   const loadMessages = useCallback(async (sessionId: string): Promise<Message[]> => {
-      try {
-        const response = await openCodeService.getMessages(sessionId, currentProject?.worktree);
-        const messagesArray = (response.data as unknown as OpenCodeMessage[]) || [];
-        const loadedMessages: Message[] = messagesArray.map((msg: OpenCodeMessage, index: number) => {
-          const parts = msg.parts || [];
-          const textPart = parts.find((part: Part) => part.type === 'text');
-          const content = (textPart && 'text' in textPart ? textPart.text : '') || '';
-          
-          return {
-            id: msg.info?.id || `msg-${index}`,
-            type: msg.info?.role === 'user' ? 'user' : 'assistant',
-            content,
-            parts,
-            timestamp: new Date(msg.info?.time?.created || Date.now()),
-            reverted: msg.info?.reverted || false,
-            metadata: 'tokens' in (msg.info || {}) ? {
-              tokens: (msg.info as {tokens?: {input: number; output: number; reasoning: number}}).tokens,
-              cost: (msg.info as {cost?: number}).cost,
-              model: (msg.info as {modelID?: string}).modelID,
-              agent: (msg.info as {mode?: string}).mode
-            } : undefined
-          };
-        });
-        
-        const activeMessages = loadedMessages.filter(msg => !msg.reverted);
-        const totalTokens = activeMessages.reduce((sum, msg) => {
-          if (msg.metadata?.tokens) {
-            return sum + msg.metadata.tokens.input + msg.metadata.tokens.output + msg.metadata.tokens.reasoning;
-          }
-          return sum;
-        }, 0);
-        console.log('[LoadMessages] Loaded', loadedMessages.length, 'messages (', activeMessages.length, 'active,', (loadedMessages.length - activeMessages.length), 'reverted) with', totalTokens, 'total tokens');
-        
-        setMessages(loadedMessages);
-       
-       // Extract the last used model from messages and save it
-       const lastAssistantMessage = [...loadedMessages].reverse().find(msg => msg.type === 'assistant' && msg.metadata?.model);
-       if (lastAssistantMessage?.metadata?.model && models.length > 0) {
-         // Parse the model ID (format: "provider/model")
-         const modelId = lastAssistantMessage.metadata.model;
-         const [providerId, modelName] = modelId.includes('/') ? modelId.split('/') : [modelId, modelId];
-         
-         // Find the matching model in the models list
-         const matchingModel = models.find(m => 
-           m.modelID === modelName || m.modelID === modelId || 
-           (m.providerID === providerId && m.modelID === modelName)
-         );
-         
-         if (matchingModel) {
-           setSessionModelMap(prev => ({
-             ...prev,
-             [sessionId]: matchingModel
-           }));
-         }
-       }
-       
-       return loadedMessages;
-     } catch {
-       // Silently handle errors when server is unavailable
-       return [];
-     }
-   }, [currentProject, models]);
 
    const loadProjects = useCallback(async () => {
      if (loadedProjectsRef.current) return;
@@ -557,11 +1175,11 @@ export function useOpenCode() {
         setProjects(projectsData);
         loadedProjectsRef.current = true;
         
-        console.log('[LoadProjects] Loaded projects from API:', projectsData.length);
+        if (process.env.NODE_ENV !== 'production') console.log('[LoadProjects] Loaded projects from API:', projectsData.length);
         if (currentProject) {
           const matchingProject = projectsData.find(p => p.id === currentProject.id);
           if (matchingProject) {
-            console.log('[LoadProjects] Current project still valid, updating with fresh data');
+            if (process.env.NODE_ENV !== 'production') console.log('[LoadProjects] Current project still valid, updating with fresh data');
             setCurrentProject(matchingProject);
           }
         }
@@ -587,21 +1205,21 @@ export function useOpenCode() {
         setSessions(sessionsData);
         loadedSessionsRef.current = true;
         
-        console.log('[LoadSessions] Loaded sessions from API:', sessionsData.length);
-        console.log('[LoadSessions] Current session state:', currentSession);
-        console.log('[LoadSessions] Messages count:', messages.length);
+        if (process.env.NODE_ENV !== 'production') console.log('[LoadSessions] Loaded sessions from API:', sessionsData.length);
+        if (process.env.NODE_ENV !== 'production') console.log('[LoadSessions] Current session state:', currentSession);
+        if (process.env.NODE_ENV !== 'production') console.log('[LoadSessions] Messages count:', messages.length);
         
         if (currentSession) {
           const matchingSession = sessionsData.find(s => s.id === currentSession.id);
           if (matchingSession) {
-            console.log('[LoadSessions] Updating current session with full data:', matchingSession);
+            if (process.env.NODE_ENV !== 'production') console.log('[LoadSessions] Updating current session with full data:', matchingSession);
             setCurrentSession(matchingSession);
             if (messages.length === 0) {
-              console.log('[LoadSessions] Loading messages for session:', currentSession.id);
+              if (process.env.NODE_ENV !== 'production') console.log('[LoadSessions] Loading messages for session:', currentSession.id);
               await loadMessages(currentSession.id);
             }
           } else {
-            console.log('[LoadSessions] Current session not found in loaded sessions, clearing');
+            if (process.env.NODE_ENV !== 'production') console.log('[LoadSessions] Current session not found in loaded sessions, clearing');
             setCurrentSession(null);
           }
         }
@@ -630,11 +1248,12 @@ export function useOpenCode() {
    const deleteSession = useCallback(async (sessionId: string) => {
      try {
        await openCodeService.deleteSession(sessionId, currentProject?.worktree);
-       setSessions(prev => prev.filter(s => s.id !== sessionId));
-       if (currentSession?.id === sessionId) {
-         setCurrentSession(null);
-         setMessages([]);
-       }
+        setSessions(prev => prev.filter(s => s.id !== sessionId));
+        if (currentSession?.id === sessionId) {
+          setCurrentSession(null);
+          setMessages([]);
+          seenMessageIdsRef.current.clear();
+        }
      } catch (error) {
        console.error('Failed to delete session:', error);
      }
@@ -643,21 +1262,28 @@ export function useOpenCode() {
     const clearAllSessions = useCallback(async () => {
       try {
         for (const session of sessions) {
-          await openCodeService.deleteSession(session.id);
+          const directory = session.directory || currentProject?.worktree;
+          try {
+            await openCodeService.deleteSession(session.id, directory);
+          } catch (deleteError) {
+            console.error('Failed to delete session during clear:', deleteError);
+          }
         }
         setSessions([]);
         setCurrentSession(null);
         setMessages([]);
+        seenMessageIdsRef.current.clear();
       } catch (error) {
         console.error('Failed to clear sessions:', error);
       }
-    }, [sessions]);
+    }, [currentProject?.worktree, sessions]);
 
      const switchProject = useCallback(async (project: Project) => {
        try {
          setCurrentProject(project);
          setCurrentSession(null);
          setMessages([]);
+         seenMessageIdsRef.current.clear();
          setSessions([]);
          loadedSessionsRef.current = false; // Reset flag before fetching
          const response = await openCodeService.getSessions(project.worktree);
@@ -700,7 +1326,90 @@ export function useOpenCode() {
        }
      }, [fileDirectory, currentProject, currentPath]);
 
-   const readFile = useCallback(async (filePath: string) => {
+  const decodeBase64ToUtf8 = useCallback((raw: string): string | null => {
+    try {
+      if (typeof globalThis.atob === 'function') {
+        const binary = globalThis.atob(raw);
+        if (typeof TextDecoder !== 'undefined') {
+          const decoder = new TextDecoder();
+          const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+          return decoder.decode(bytes);
+        }
+        return binary;
+      }
+    } catch (error) {
+      if (isDevEnvironment) {
+        console.error('Failed to decode base64 via atob:', error);
+      }
+    }
+
+    if (typeof Buffer !== 'undefined') {
+      try {
+        return Buffer.from(raw, 'base64').toString('utf-8');
+      } catch (error) {
+        if (isDevEnvironment) {
+          console.error('Failed to decode base64 via Buffer:', error);
+        }
+      }
+    }
+
+    return null;
+  }, []);
+
+  const shouldDecodeAsText = useCallback((mimeType: string | null, filePath: string) => {
+    const baseName = filePath.split(/[\\/]/).pop() ?? '';
+    const normalizedBaseName = baseName.toLowerCase();
+    const extension = normalizedBaseName.includes('.')
+      ? normalizedBaseName.split('.').pop() ?? ''
+      : '';
+    const isTextByExtension = extension ? TEXT_LIKE_EXTENSIONS.has(extension) : false;
+    const isTextByName = TEXT_LIKE_FILENAMES.has(normalizedBaseName);
+
+    if (!mimeType) {
+      return isTextByExtension || isTextByName;
+    }
+
+    const normalized = mimeType.toLowerCase();
+    if (normalized.startsWith('text/')) return true;
+    if (normalized.includes('charset=')) return true;
+    if (TEXT_LIKE_MIME_SNIPPETS.some((snippet) => normalized.includes(snippet))) return true;
+    if (normalized === 'application/octet-stream' && (isTextByExtension || isTextByName)) {
+      return true;
+    }
+    return isTextByExtension || isTextByName;
+  }, []);
+
+  const buildDataUrl = (content: string, encoding: string | null, mimeType: string | null) => {
+    if (encoding !== BASE64_ENCODING) return null;
+    const safeMime = mimeType && mimeType.trim() ? mimeType : 'application/octet-stream';
+    return `data:${safeMime};base64,${content}`;
+  };
+
+  const buildFileContent = useCallback((
+    filePath: string,
+    content: string,
+    encoding: string | null,
+    mimeType: string | null,
+  ): FileContentData => {
+    const normalizedEncoding =
+      typeof encoding === 'string' ? encoding.trim().toLowerCase() : null;
+    let text: string | null = null;
+    if (!normalizedEncoding) {
+      text = content;
+    } else if (normalizedEncoding === BASE64_ENCODING && shouldDecodeAsText(mimeType, filePath)) {
+      text = decodeBase64ToUtf8(content) ?? content;
+    }
+
+    return {
+      content,
+      encoding: normalizedEncoding,
+      mimeType: mimeType ?? null,
+      text,
+      dataUrl: buildDataUrl(content, normalizedEncoding, mimeType ?? null),
+    };
+  }, [decodeBase64ToUtf8, shouldDecodeAsText]);
+
+  const readFile = useCallback(async (filePath: string): Promise<FileContentData | null> => {
       try {
         const baseDirectory = currentProject?.worktree ?? currentPath ?? undefined;
         const response = await openCodeService.readFile(filePath, baseDirectory);
@@ -708,24 +1417,32 @@ export function useOpenCode() {
         if (!data) {
           return null;
         }
+
         if (typeof data === 'string') {
-          return data;
+          return buildFileContent(filePath, data, null, null);
         }
+
         if (typeof data === 'object') {
           if ('content' in data && typeof data.content === 'string') {
-            return data.content;
+            const encoding =
+              'encoding' in data && typeof data.encoding === 'string' ? data.encoding : null;
+            const mimeType =
+              'mimeType' in data && typeof data.mimeType === 'string' ? data.mimeType : null;
+            return buildFileContent(filePath, data.content, encoding, mimeType);
           }
           if ('diff' in data && typeof data.diff === 'string') {
-            return data.diff;
+            return buildFileContent(filePath, data.diff, null, 'text/plain');
           }
-          return JSON.stringify(data);
+          const fallback = JSON.stringify(data);
+          return buildFileContent(filePath, fallback, null, 'application/json');
         }
+
         return null;
       } catch (error) {
         console.error('Failed to read file:', error);
         return null;
       }
-    }, [currentProject, currentPath]);
+    }, [buildFileContent, currentProject, currentPath]);
 
 
     const searchText = useCallback(async (query: string) => {
@@ -756,8 +1473,9 @@ export function useOpenCode() {
          const files = await searchFiles('command/*.md');
          const commands = await Promise.all(
            files.map(async (file) => {
-             const content = await readFile(file);
-             if (content) {
+            const fileData = await readFile(file);
+            const content = fileData?.text;
+            if (content) {
                const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
                if (frontmatterMatch) {
                  const frontmatter = frontmatterMatch[1];
@@ -783,16 +1501,16 @@ export function useOpenCode() {
      const loadModels = useCallback(async () => {
        if (loadedModels) return;
        try {
-         console.log('Loading models...');
+         if (process.env.NODE_ENV !== 'production') console.log('Loading models...');
          const response = await openCodeService.getProviders();
-          console.log('Providers response:', response);
+          if (process.env.NODE_ENV !== 'production') console.log('Providers response:', response);
           const providersData = response.data as ProvidersData | undefined;
-          console.log('Providers data:', providersData);
+          if (process.env.NODE_ENV !== 'production') console.log('Providers data:', providersData);
           setProvidersData(providersData || null);
           if (providersData && providersData.providers && Array.isArray(providersData.providers)) {
             const availableModels: Model[] = [];
              providersData.providers.forEach((provider: { id: string; name?: string; models?: { id: string; name?: string }[] | Record<string, { name?: string; [key: string]: unknown }> }) => {
-              console.log('Processing provider:', provider);
+              if (process.env.NODE_ENV !== 'production') console.log('Processing provider:', provider);
               // Check if provider has models
               if (provider.models && typeof provider.models === 'object') {
                 // Handle models as object
@@ -815,7 +1533,7 @@ export function useOpenCode() {
               }
               // Only add if has models, don't treat provider as model
             });
-            console.log('Available models:', availableModels);
+            if (process.env.NODE_ENV !== 'production') console.log('Available models:', availableModels);
             setModels(availableModels);
             setLoadedModels(true);
             
@@ -928,14 +1646,6 @@ export function useOpenCode() {
      }
    }, []);
 
-    const showToast = useCallback(async (message: string, variant: 'success' | 'error' | 'warning' | 'info' = 'info') => {
-      try {
-        await openCodeService.showToast(message, variant);
-      } catch (error) {
-        console.error('Failed to show toast:', error);
-      }
-    }, []);
-
     // Agent management
     const loadAgents = useCallback(async () => {
       if (loadedAgentsRef.current) return;
@@ -1000,7 +1710,7 @@ export function useOpenCode() {
          currentProjectIdRef.current = currentProject.id;
          
          if (projectIdChanged) {
-           console.log('Project changed, loading sessions for:', currentProject);
+           if (process.env.NODE_ENV !== 'production') console.log('Project changed, loading sessions for:', currentProject);
            loadedSessionsRef.current = false; // Reset flag when project changes
            loadSessions();
          }
@@ -1088,66 +1798,74 @@ export function useOpenCode() {
        }
      }, [currentProject?.worktree]);
 
-     return {
-       currentSession,
-       messages,
-       setMessages,
-       sessions,
-       loading,
-       createSession,
-       sendMessage,
-       loadSessions,
-       loadMessages,
-       switchSession,
-       deleteSession,
-       clearAllSessions,
-       // New features
-        projects,
-        currentProject,
-        switchProject,
-        loadProjects,
-        files,
-        fileDirectory,
-        loadFiles,
-        searchFiles,
+      return {
+        currentSession,
+        messages,
+        setMessages,
+        sessions,
+        loading,
+        createSession,
+        sendMessage,
+        loadSessions,
+        loadMessages,
+        switchSession,
+        deleteSession,
+        clearAllSessions,
+        // New features
+         projects,
+         currentProject,
+         switchProject,
+         loadProjects,
+         files,
+         fileDirectory,
+         loadFiles,
+         searchFiles,
 
-       readFile,
-       searchText,
-       models,
-       selectedModel,
-       selectModel,
-       loadModels,
-       config,
-       currentPath,
-       loadCurrentPath,
-       providersData,
-        isConnected,
-        isHydrated,
-        customCommands,
-        openHelp,
-        openSessions,
-        openThemes,
-        openModels,
-        showToast,
-        showHelp,
-        setShowHelp,
-        showThemes,
-        setShowThemes,
-         showOnboarding,
-          setShowOnboarding,
-          showModelPicker,
-          setShowModelPicker,
-          agents,
-          currentAgent,
-          selectAgent,
-          loadAgents,
-          extractTextFromParts,
-          runShell,
-          revertMessage,
-          unrevertSession,
-          shareSession,
-          unshareSession,
-          initSession,
-          summarizeSession,
-       };
+        readFile,
+        searchText,
+        models,
+        selectedModel,
+        selectModel,
+        loadModels,
+        config,
+        currentPath,
+        loadCurrentPath,
+        providersData,
+         isConnected,
+         isHydrated,
+         customCommands,
+         openHelp,
+         openSessions,
+         openThemes,
+         openModels,
+         showToast,
+         showHelp,
+         setShowHelp,
+         showThemes,
+         setShowThemes,
+          showOnboarding,
+           setShowOnboarding,
+           showModelPicker,
+           setShowModelPicker,
+           agents,
+           currentAgent,
+           selectAgent,
+           loadAgents,
+           extractTextFromParts,
+           runShell,
+           revertMessage,
+           unrevertSession,
+           shareSession,
+           unshareSession,
+           initSession,
+           summarizeSession,
+            sseConnectionState,
+            // Permission and todo state
+            currentPermission,
+            setCurrentPermission,
+            shouldBlurEditor,
+            setShouldBlurEditor,
+            currentSessionTodos,
+            setCurrentSessionTodos,
+         };
  }
