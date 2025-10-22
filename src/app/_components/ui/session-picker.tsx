@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Badge, Separator, Button, Input } from './index';
+import React, { useEffect } from 'react';
+import { Badge, Separator, Button, Dialog, View } from './index';
 
 interface Session {
   id: string;
@@ -16,7 +16,6 @@ interface SessionPickerProps {
   currentSession: Session | null;
   onSelect: (sessionId: string) => void;
   onDelete: (sessionId: string) => void;
-  onCreate: (title: string) => void;
   onClose: () => void;
 }
 
@@ -25,11 +24,8 @@ export const SessionPicker: React.FC<SessionPickerProps> = ({
   currentSession,
   onSelect,
   onDelete,
-  onCreate,
   onClose,
 }) => {
-  const [newSessionTitle, setNewSessionTitle] = useState('');
-
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -43,50 +39,18 @@ export const SessionPicker: React.FC<SessionPickerProps> = ({
   }, [onClose]);
 
   return (
-    <div 
-      className="fixed inset-0 flex items-center justify-center z-50 p-4"
-      onClick={onClose}
-    >
-      <div 
+    <Dialog open onClose={onClose}>
+      <View
+        box="square"
         className="rounded border overflow-hidden shadow-2xl max-w-md w-full max-h-[80vh] overflow-y-auto scrollbar"
-        style={{ 
+        style={{
           backgroundColor: 'var(--theme-background)',
           borderColor: 'var(--theme-primary)',
           borderWidth: '1px',
         }}
-        onClick={(e) => e.stopPropagation()}
       >
         <div className="p-4">
           <h2 className="text-lg font-bold mb-2">Sessions</h2>
-          <Separator className="mb-4" />
-          
-          <div className="flex gap-2 mb-4">
-            <Input
-              value={newSessionTitle}
-              onChange={(e) => setNewSessionTitle(e.target.value)}
-              placeholder="New session title..."
-              size="small"
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && newSessionTitle.trim()) {
-                  onCreate(newSessionTitle.trim());
-                  setNewSessionTitle('');
-                }
-              }}
-            />
-            <Button
-              variant="foreground0"
-              box="round"
-              size="small"
-              onClick={() => {
-                if (newSessionTitle.trim()) {
-                  onCreate(newSessionTitle.trim());
-                  setNewSessionTitle('');
-                }
-              }}
-            >
-              Create
-            </Button>
-          </div>
         </div>
         
         <Separator />
@@ -167,7 +131,7 @@ export const SessionPicker: React.FC<SessionPickerProps> = ({
             Close
           </Button>
         </div>
-      </div>
-    </div>
+      </View>
+    </Dialog>
   );
 };

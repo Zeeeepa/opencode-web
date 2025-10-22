@@ -1458,14 +1458,16 @@ export function useOpenCode() {
 
      const searchFiles = useCallback(async (query: string) => {
        try {
-         const response = await openCodeService.findFiles(query);
+         const baseDirectory = currentProject?.worktree ?? currentPath ?? undefined;
+         const response = await openCodeService.findFiles(query, baseDirectory);
          const results = Array.isArray(response.data) ? response.data : [];
          return results;
        } catch (error) {
          console.error('Failed to search files:', error);
          return [];
        }
-     }, []);
+      }, [currentProject?.worktree, currentPath]);
+
 
      const loadCustomCommands = useCallback(async () => {
        if (loadedCustomCommands) return;

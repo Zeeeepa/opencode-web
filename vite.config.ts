@@ -1,23 +1,24 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import { tanstackStart } from '@tanstack/react-start/plugin/vite'
 import viteReact from '@vitejs/plugin-react'
 import tsconfigPaths from 'vite-tsconfig-paths'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
-export default defineConfig(() => {
-  const pwaAssetsUrl = process.env.VITE_PWA_ASSETS_URL || ''
-  const allowedHostsEnv = process.env.VITE_ALLOWED_HOSTS
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '')
+  const pwaAssetsUrl = env.VITE_PWA_ASSETS_URL || ''
+  const allowedHostsEnv = env.VITE_ALLOWED_HOSTS
   const allowedHosts =
-    allowedHostsEnv?.split(',').map((host) => host.trim()).filter(Boolean) ?? undefined
+    allowedHostsEnv?.split(',').map((host) => host.trim()).filter(Boolean) ?? ['localhost', 'code.shuv.dev']
 
   return {
     server: {
       port: 3000,
-      ...(allowedHosts ? { allowedHosts } : {}),
+      allowedHosts,
       proxy: {
         '/api/events': {
-          target: process.env.VITE_OPENCODE_SERVER_URL || 'http://localhost:4096',
+          target: env.VITE_OPENCODE_SERVER_URL || 'http://localhost:4096',
           changeOrigin: true,
           rewrite: (path) => {
             const url = new URL(path, 'http://localhost')

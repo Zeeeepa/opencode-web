@@ -119,10 +119,11 @@ export const runCommand = createServerFn({ method: 'POST' })
   })
 
 export const findFiles = createServerFn({ method: 'GET' })
-  .inputValidator((data: { query: string }) => data)
+  .inputValidator((data: { query: string; directory?: string }) => data)
   .handler(async ({ data }) => {
-    return httpApi.findFiles(data.query)
+    return httpApi.findFiles(data.query, data.directory)
   })
+
 
 export const findInFiles = createServerFn({ method: 'GET' })
   .inputValidator((data: { pattern: string }) => data)

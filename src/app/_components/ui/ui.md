@@ -1,10 +1,10 @@
-# WebTUI React Components Documentation
+# Web UI Components Documentation
 
-This directory contains React components that wrap the WebTUI CSS library, providing a type-safe interface for building terminal user interface (TUI) styled components in React applications.
+This directory contains React components that wrap the WebTUI CSS library, providing a type-safe interface for building styled components in React applications.
 
 ## Overview
 
-WebTUI is a CSS library that brings terminal UI aesthetics to web browsers. These React components provide a convenient way to use WebTUI styling with proper TypeScript support and React patterns.
+WebTUI is a CSS library that brings terminal-inspired aesthetics to web browsers. These React components provide a convenient way to use WebTUI styling with proper TypeScript support and React patterns.
 
 ## Installation & Setup
 
@@ -319,7 +319,7 @@ General container component with box utilities.
 4. **Customization**: Use `className` prop for additional styling
 5. **Composition**: Use sub-components (like TableHeader, TableBody) for complex structures
 
-## WebTUI Features Used
+## WebTUI CSS Features Used
 
 - `is-` attributes for component identification
 - `variant-` attributes for color variations
@@ -436,7 +436,7 @@ function Dashboard() {
 ## Notes
 
 - All components extend their respective HTML element interfaces
-- WebTUI-specific props use kebab-case (e.g., `variant-`, `box-`)
+- WebTUI CSS-specific props use kebab-case (e.g., `variant-`, `box-`)
 - Components are designed to be composable and flexible
 - TypeScript provides full type safety and IntelliSense support
 - Components follow React best practices and patterns

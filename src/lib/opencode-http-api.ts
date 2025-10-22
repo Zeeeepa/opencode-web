@@ -258,8 +258,10 @@ export async function runCommand(
   return response.json()
 }
 
-export async function findFiles(query: string) {
-  const response = await fetch(buildUrl('/find/file', { query }))
+export async function findFiles(query: string, directory?: string) {
+  const params: Record<string, string> = { query }
+  if (directory) params.directory = directory
+  const response = await fetch(buildUrl('/find/file', params))
   if (!response.ok) {
     throw new Error(`Failed to find files: ${response.statusText}`)
   }

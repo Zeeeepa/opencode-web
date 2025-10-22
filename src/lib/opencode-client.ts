@@ -240,9 +240,9 @@ export const openCodeService = {
     }
   },
 
-  async findFiles(query: string) {
+  async findFiles(query: string, directory?: string) {
     try {
-      const response = await serverFns.findFiles({ data: { query } });
+      const response = await serverFns.findFiles({ data: { query, directory } });
       return { data: response };
     } catch (error) {
       throw error;

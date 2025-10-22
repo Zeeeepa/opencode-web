@@ -207,7 +207,17 @@ export const Route = createFileRoute("/")({
 function OpenCodeChatTUI() {
   const [input, setInput] = useState("");
   const [newSessionTitle, setNewSessionTitle] = useState("");
-  const [newSessionDirectory, setNewSessionDirectory] = useState("");
+  const [showNewProjectForm, setShowNewProjectForm] = useState(false);
+  const [newProjectDirectory, setNewProjectDirectory] = useState("");
+  const closeNewProjectDialog = () => {
+    setShowNewProjectForm(false);
+    setNewProjectDirectory("");
+  };
+  const [showNewSessionForm, setShowNewSessionForm] = useState(false);
+  const closeNewSessionDialog = () => {
+    setShowNewSessionForm(false);
+    setNewSessionTitle("");
+  };
   const [activeTab, setActiveTab] = useState(() => {
     if (typeof window !== "undefined") {
       return localStorage.getItem("opencode-active-tab") || "workspace";
@@ -327,20 +337,9 @@ function OpenCodeChatTUI() {
     setShouldBlurEditor,
     currentSessionTodos,
   } = useOpenCodeContext();
+ 
+   // Removed automatic session creation to prevent spam
 
-  useEffect(() => {
-    if (currentProject?.worktree) {
-      setNewSessionDirectory((prev) =>
-        prev && prev !== currentProject.worktree
-          ? prev
-          : currentProject.worktree,
-      );
-    } else {
-      setNewSessionDirectory("");
-    }
-  }, [currentProject?.worktree]);
-
-  // Removed automatic session creation to prevent spam
 
   const handleSend = async () => {
     if (!input.trim() || loading) return;
@@ -1050,14 +1049,34 @@ function OpenCodeChatTUI() {
 
   const handleCreateSession = async () => {
     const title = newSessionTitle.trim() || "New Session";
-    const directory = newSessionDirectory.trim() || currentProject?.worktree;
+    const directory = currentProject?.worktree || "";
+    if (!directory) {
+      console.warn(
+        "Select a project before creating a session.",
+      );
+      return;
+    }
     try {
       await createSession({ title, directory });
       await loadSessions();
-      setNewSessionTitle("");
-      setNewSessionDirectory("");
+      closeNewSessionDialog();
     } catch (err) {
       console.error("Failed to create session:", err);
+    }
+  };
+
+  const handleCreateProject = async () => {
+    const directory = newProjectDirectory.trim();
+    if (!directory) return;
+    const projectLabel = directory.split(/[\\/]/).filter(Boolean).pop() || "New Project";
+    const title = `${projectLabel} session`;
+    try {
+      await createSession({ title, directory });
+      await loadSessions();
+      closeNewProjectDialog();
+      setNewSessionTitle("");
+    } catch (err) {
+      console.error("Failed to create project session:", err);
     }
   };
 
@@ -1486,50 +1505,52 @@ function OpenCodeChatTUI() {
             Disconnected from OpenCode server
           </div>
         )}
-        <div className="flex items-center gap-2 lg:gap-4">
+        <div className="flex items-start sm:items-center gap-2 lg:gap-4">
           <HamburgerMenu
             isOpen={isMobileSidebarOpen}
             onClick={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
           />
-          <Badge variant="foreground1" cap="round">
-            opencode web
-          </Badge>
-          {isConnected !== null && (
-            <div className="flex items-center gap-2">
-              <div
-                className={`connection-indicator ${isConnected ? "connected" : "disconnected"}`}
-              />
-              <Badge
-                variant={isConnected ? "background2" : "foreground0"}
-                cap="round"
-                className="hidden sm:inline"
-              >
-                {isConnected ? "Connected" : "Disconnected"}
-              </Badge>
-              {sseConnectionState && (
+          <div className="flex flex-col items-center gap-1 text-center sm:flex-row sm:items-center sm:gap-2 sm:text-left">
+            <Badge variant="foreground1" cap="round">
+              opencode web
+            </Badge>
+            {isConnected !== null && (
+              <div className="flex items-center gap-2 self-center justify-center order-first sm:order-none sm:self-auto sm:justify-start">
                 <div
-                  className="flex items-center gap-1"
-                  title={`SSE: ${sseConnectionState.connected ? "Connected" : "Disconnected"}${sseConnectionState.reconnecting ? " (Reconnecting...)" : ""}${sseConnectionState.error ? ` - ${sseConnectionState.error}` : ""}`}
+                  className={`connection-indicator ${isConnected ? "connected" : "disconnected"}`}
+                />
+                <Badge
+                  variant={isConnected ? "background2" : "foreground0"}
+                  cap="round"
+                  className="hidden sm:inline"
                 >
+                  {isConnected ? "Connected" : "Disconnected"}
+                </Badge>
+                {sseConnectionState && (
                   <div
-                    className={`w-2 h-2 rounded-full ${sseConnectionState.connected ? "bg-green-500" : "bg-red-500"} ${sseConnectionState.reconnecting ? "animate-pulse" : ""}`}
-                  />
-                  <Badge
-                    variant={
-                      sseConnectionState.connected
-                        ? "background2"
-                        : "foreground0"
-                    }
-                    cap="round"
-                    className="hidden md:inline text-xs"
+                    className="flex items-center gap-1"
+                    title={`SSE: ${sseConnectionState.connected ? "Connected" : "Disconnected"}${sseConnectionState.reconnecting ? " (Reconnecting...)" : ""}${sseConnectionState.error ? ` - ${sseConnectionState.error}` : ""}`}
                   >
-                    SSE {sseConnectionState.connected ? "Live" : "Off"}
-                    {sseConnectionState.reconnecting && "..."}
-                  </Badge>
-                </div>
-              )}
-            </div>
-          )}
+                    <div
+                      className={`w-2 h-2 rounded-full ${sseConnectionState.connected ? "bg-green-500" : "bg-red-500"} ${sseConnectionState.reconnecting ? "animate-pulse" : ""}`}
+                    />
+                    <Badge
+                      variant={
+                        sseConnectionState.connected
+                          ? "background2"
+                          : "foreground0"
+                      }
+                      cap="round"
+                      className="hidden md:inline text-xs"
+                    >
+                      SSE {sseConnectionState.connected ? "Live" : "Off"}
+                      {sseConnectionState.reconnecting && "..."}
+                    </Badge>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
           <div className="flex gap-2">
             {["workspace", "files"].map((tab) => (
               <Button
@@ -1585,7 +1606,20 @@ function OpenCodeChatTUI() {
                     box="square"
                     className="p-2 mb-2 bg-theme-background-alt"
                   >
-                    <h3 className="text-sm font-medium">Projects</h3>
+                    <div className="flex items-center justify-between gap-2">
+                      <h3 className="text-sm font-medium">Projects</h3>
+                      <Button
+                        variant="foreground0"
+                        box="round"
+                        size="small"
+                        onClick={() => {
+                          setNewProjectDirectory("");
+                          setShowNewProjectForm(true);
+                        }}
+                      >
+                        New Project
+                      </Button>
+                    </div>
                   </View>
                   <Separator className="mb-2" />
                   <div className="flex-1 flex flex-col gap-3">
@@ -1613,7 +1647,7 @@ function OpenCodeChatTUI() {
                       <div className="text-xs text-theme-muted">
                         {sortedProjects.length > 0
                           ? "Choose a project from the menu above."
-                          : "No projects yet. Create one by starting a session with a new directory."}
+                          : "No projects yet. Use New Project to add an existing git repository."}
                       </div>
                     )}
                   </div>
@@ -1641,10 +1675,14 @@ function OpenCodeChatTUI() {
                         <Button
                           variant="foreground0"
                           box="round"
-                          onClick={handleCreateSession}
+                          onClick={() => {
+                            setNewSessionTitle("");
+                            setShowNewSessionForm(true);
+                          }}
                           size="small"
+                          disabled={!currentProject}
                         >
-                          New
+                          New Session
                         </Button>
                       </div>
                     </div>
@@ -1652,43 +1690,10 @@ function OpenCodeChatTUI() {
                   <Separator className="mb-2" />
                   {!currentProject ? (
                     <div className="flex-1 flex items-center justify-center text-sm text-theme-muted">
-                      Select a project first to view sessions
+                      Select a project or use New Project to view sessions
                     </div>
                   ) : (
                     <>
-                      <div className="mb-2 flex-shrink-0 space-y-2">
-                        <div>
-                          <Input
-                            value={newSessionTitle}
-                            onChange={(e) => setNewSessionTitle(e.target.value)}
-                            placeholder="Session title..."
-                            size="small"
-                            className="bg-theme-background text-theme-foreground border-theme-primary"
-                          />
-                        </div>
-                        <div>
-                          <Input
-                            value={newSessionDirectory}
-                            onChange={(e) =>
-                              setNewSessionDirectory(e.target.value)
-                            }
-                            placeholder={
-                              currentProject?.worktree
-                                ? `Project directory (default ${currentProject.worktree})`
-                                : "Project directory..."
-                            }
-                            size="small"
-                            className="bg-theme-background text-theme-foreground border-theme-primary"
-                          />
-                        </div>
-                        <div className="text-xs opacity-70 mt-1 truncate">
-                          {newSessionDirectory
-                            ? `Using directory: ${newSessionDirectory}`
-                            : currentProject
-                              ? `Defaulting to ${currentProject.worktree}`
-                              : "Specify a project directory to create a project session."}
-                        </div>
-                      </div>
                       <div className="flex-1 overflow-y-auto scrollbar space-y-2 min-h-0">
                         {sessions
                           .filter(
@@ -1971,7 +1976,22 @@ function OpenCodeChatTUI() {
             <div className="h-full flex flex-col gap-4 overflow-hidden">
               {/* Projects Section */}
               <div className="flex flex-col flex-shrink-0">
-                <h3 className="text-sm font-medium mb-2">Projects</h3>
+                <div className="flex items-center justify-between mb-2 gap-2">
+                  <h3 className="text-sm font-medium">Projects</h3>
+                  <Button
+                    variant="foreground0"
+                    box="round"
+                    size="small"
+                    className="flex-shrink-0"
+                    onClick={() => {
+                      setIsMobileSidebarOpen(false);
+                      setNewProjectDirectory("");
+                      setShowNewProjectForm(true);
+                    }}
+                  >
+                    New Project
+                  </Button>
+                </div>
                 <Separator className="mb-2" />
                 <div className="flex flex-col gap-3">
                   <ProjectSelector
@@ -1985,23 +2005,19 @@ function OpenCodeChatTUI() {
                   />
                   {currentProject ? (
                     <div className="text-xs leading-relaxed space-y-1 text-theme-foreground">
-                      <div className="truncate">
-                        Dir: {currentProject.worktree}
-                      </div>
+                      <div className="truncate">Dir: {currentProject.worktree}</div>
                       <div className="truncate">
                         VCS: {currentProject.vcs || "Unknown"}
                       </div>
                       {currentProjectLastTouched && (
-                        <div>
-                          Updated: {currentProjectLastTouched.toLocaleDateString()}
-                        </div>
+                        <div>Updated: {currentProjectLastTouched.toLocaleDateString()}</div>
                       )}
                     </div>
                   ) : (
                     <div className="text-xs text-theme-muted">
                       {sortedProjects.length > 0
                         ? "Choose a project from the menu above."
-                        : "No projects yet. Start a session with a new directory to create one."}
+                        : "No projects yet. Use New Project to add an existing git repository."}
                     </div>
                   )}
                 </div>
@@ -2016,94 +2032,74 @@ function OpenCodeChatTUI() {
                   <Button
                     variant="foreground0"
                     box="round"
-                    onClick={handleCreateSession}
+                    onClick={() => {
+                      setIsMobileSidebarOpen(false);
+                      setNewSessionTitle("");
+                      setShowNewSessionForm(true);
+                    }}
                     size="small"
+                    disabled={!currentProject}
                   >
-                    New
+                    New Session
                   </Button>
                 </div>
                 <Separator className="mb-2" />
-                <div className="space-y-2 mb-2">
-                  <Input
-                    value={newSessionTitle}
-                    onChange={(e) => setNewSessionTitle(e.target.value)}
-                    placeholder="Session title..."
-                    size="small"
-                    className="bg-theme-background text-theme-foreground border-theme-primary"
-                  />
-                  <Input
-                    value={newSessionDirectory}
-                    onChange={(e) => setNewSessionDirectory(e.target.value)}
-                    placeholder={
-                      currentProject?.worktree
-                        ? `Project directory (default ${currentProject.worktree})`
-                        : "Project directory..."
-                    }
-                    size="small"
-                    className="bg-theme-background text-theme-foreground border-theme-primary"
-                  />
-                  <div className="text-xs opacity-70">
-                    {newSessionDirectory
-                      ? `Using directory: ${newSessionDirectory}`
-                      : currentProject
-                        ? `Defaulting to ${currentProject.worktree}`
-                        : "Specify a project directory to create a project session."}
-                  </div>
-                </div>
                 {!currentProject ? (
                   <div className="flex-1 flex items-center justify-center text-sm text-theme-muted text-center px-4">
-                    Select a project or enter a directory above to create one
+                    Select a project, or use New Project to add a git directory
                   </div>
                 ) : (
-                  <div className="flex-1 overflow-y-auto space-y-1 min-h-0">
-                    {sessions
-                      .filter(
-                        (session) =>
-                          session.projectID === currentProject?.id ||
-                          session.directory === currentProject?.worktree,
-                      )
-                      .map((session) => {
-                        const isSelected = currentSession?.id === session.id;
-                        return (
-                          <div
-                            key={session.id}
-                            className="p-2 cursor-pointer transition-colors rounded"
-                            style={{
-                              backgroundColor: isSelected
-                                ? "var(--theme-primary)"
-                                : "var(--theme-background)",
-                              color: isSelected
-                                ? "var(--theme-background)"
-                                : "var(--theme-foreground)",
-                            }}
-                            onClick={() => {
-                              handleSessionSwitch(session.id);
-                              setIsMobileSidebarOpen(false);
-                            }}
-                            onMouseEnter={(e) => {
-                              if (!isSelected) {
-                                e.currentTarget.style.backgroundColor =
-                                  "var(--theme-backgroundAlt)";
-                              }
-                            }}
-                            onMouseLeave={(e) => {
-                              if (!isSelected) {
-                                e.currentTarget.style.backgroundColor =
-                                  "var(--theme-background)";
-                              }
-                            }}
-                          >
-                            <div className="font-medium text-sm truncate">
-                              {session.title}
+                  <>
+                    <div className="flex-1 overflow-y-auto space-y-1 min-h-0">
+                      {sessions
+                        .filter(
+                          (session) =>
+                            session.projectID === currentProject?.id ||
+                            session.directory === currentProject?.worktree,
+                        )
+                        .map((session) => {
+                          const isSelected = currentSession?.id === session.id;
+                          return (
+                            <div
+                              key={session.id}
+                              className="p-2 cursor-pointer transition-colors rounded"
+                              style={{
+                                backgroundColor: isSelected
+                                  ? "var(--theme-primary)"
+                                  : "var(--theme-background)",
+                                color: isSelected
+                                  ? "var(--theme-background)"
+                                  : "var(--theme-foreground)",
+                              }}
+                              onClick={() => {
+                                handleSessionSwitch(session.id);
+                                setIsMobileSidebarOpen(false);
+                              }}
+                              onMouseEnter={(e) => {
+                                if (!isSelected) {
+                                  e.currentTarget.style.backgroundColor =
+                                    "var(--theme-backgroundAlt)";
+                                }
+                              }}
+                              onMouseLeave={(e) => {
+                                if (!isSelected) {
+                                  e.currentTarget.style.backgroundColor =
+                                    "var(--theme-background)";
+                                }
+                              }}
+                            >
+                              <div className="font-medium text-sm truncate">
+                                {session.title}
+                              </div>
+                              <div className="text-xs opacity-70">
+                                {session.createdAt?.toLocaleDateString() ||
+                                  "Unknown"}
+                              </div>
                             </div>
-                            <div className="text-xs opacity-70">
-                              {session.createdAt?.toLocaleDateString() ||
-                                "Unknown"}
-                            </div>
-                          </div>
-                        );
-                      })}
-                  </div>
+                          );
+                        })}
+                    </div>
+                  </>
                 )}
               </div>
             </div>
@@ -2206,7 +2202,10 @@ function OpenCodeChatTUI() {
 
           {/* Content */}
           {activeTab === "workspace" && (
-            <div className="flex-1 flex flex-col overflow-hidden">
+            <div
+              className="flex-1 flex flex-col overflow-hidden"
+              data-dialog-anchor="chat"
+            >
               {/* Chat Messages */}
               <div className="flex-1 overflow-y-auto scrollbar p-4 space-y-4 min-h-0">
                 {messages.length === 0 && !loading && (
@@ -2678,6 +2677,111 @@ function OpenCodeChatTUI() {
         </View>
       </div>
 
+      {showNewProjectForm && (
+        <Dialog open onClose={closeNewProjectDialog}>
+          <View
+            box="square"
+            className="w-full max-w-lg rounded border bg-theme-background text-theme-foreground"
+            style={{ borderColor: "var(--theme-primary)", borderWidth: "1px" }}
+          >
+            <div className="p-5 space-y-4">
+              <div className="space-y-2">
+                <h2 className="text-lg font-semibold">Add Project</h2>
+                <p className="text-xs text-theme-muted leading-relaxed">
+                  Project directories must already be git repositories. We'll create the first session automatically.
+                </p>
+              </div>
+              <Input
+                value={newProjectDirectory}
+                onChange={(e) => setNewProjectDirectory(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && newProjectDirectory.trim()) {
+                    e.preventDefault();
+                    void handleCreateProject();
+                  }
+                }}
+                placeholder="Project directory (git repo)..."
+                size="small"
+                className="bg-theme-background text-theme-foreground border-theme-primary"
+                autoFocus
+              />
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="background2"
+                  box="round"
+                  size="small"
+                  onClick={closeNewProjectDialog}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="foreground0"
+                  box="round"
+                  size="small"
+                  onClick={() => void handleCreateProject()}
+                  disabled={!newProjectDirectory.trim() || loading}
+                >
+                  Create Project
+                </Button>
+              </div>
+            </div>
+          </View>
+        </Dialog>
+      )}
+
+      {/* New Session Dialog */}
+      {showNewSessionForm && (
+        <Dialog open onClose={closeNewSessionDialog}>
+          <View
+            box="square"
+            className="w-full max-w-lg rounded border bg-theme-background text-theme-foreground"
+            style={{ borderColor: "var(--theme-primary)", borderWidth: "1px" }}
+          >
+            <div className="p-5 space-y-4">
+              <div className="space-y-2">
+                <h2 className="text-lg font-semibold">New Session</h2>
+                <p className="text-xs text-theme-muted leading-relaxed">
+                  Create a new session for the current project: {currentProject?.worktree}
+                </p>
+              </div>
+              <Input
+                value={newSessionTitle}
+                onChange={(e) => setNewSessionTitle(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && newSessionTitle.trim()) {
+                    e.preventDefault();
+                    void handleCreateSession();
+                  }
+                }}
+                placeholder="Session title..."
+                size="small"
+                className="bg-theme-background text-theme-foreground border-theme-primary"
+                autoFocus
+              />
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="background2"
+                  box="round"
+                  size="small"
+                  onClick={closeNewSessionDialog}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="foreground0"
+                  box="round"
+                  size="small"
+                  onClick={() => void handleCreateSession()}
+                  disabled={!newSessionTitle.trim() || loading}
+                >
+                  Create Session
+                </Button>
+              </div>
+            </div>
+          </View>
+        </Dialog>
+      )}
+
       {/* Help Dialog */}
       {showHelp && (
         <Dialog open={showHelp} onClose={() => setShowHelp(false)}>
@@ -3056,10 +3160,6 @@ function OpenCodeChatTUI() {
           currentSession={currentSession}
           onSelect={switchSession}
           onDelete={deleteSession}
-          onCreate={async (title) => {
-            await createSession({ title });
-            await loadSessions();
-          }}
           onClose={() => setShowSessionPicker(false)}
         />
       )}

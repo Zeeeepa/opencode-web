@@ -1,8 +1,8 @@
-# OpenCode TUI SSE Event System Documentation
+# OpenCode Web SSE Event System Documentation
 
 ## Overview
 
-The OpenCode TUI (Terminal User Interface) receives real-time updates from the OpenCode server through Server-Sent Events (SSE) via the `/event` endpoint. This document provides a comprehensive analysis of how SSE events are handled, processed, and displayed in the TUI.
+The OpenCode Web interface receives real-time updates from the OpenCode server through Server-Sent Events (SSE) via the `/event` endpoint. This document provides a comprehensive analysis of how SSE events are handled, processed, and displayed in the web interface.
 
 ## SSE Stream Architecture
 
@@ -41,13 +41,14 @@ The SSE stream is implemented in the OpenCode server at `packages/opencode/src/s
 
 ### Client-Side Implementation
 
-The TUI connects to the SSE stream in `packages/tui/cmd/opencode/main.go`:
+The Web interface connects to the SSE stream using EventSource or similar browser APIs:
 
-```go
-go func() {
-  stream := httpClient.Event.ListStreaming(ctx, opencode.EventListParams{})
-  for stream.Next() {
-    evt := stream.Current().AsUnion()
+```typescript
+const eventSource = new EventSource('/api/events');
+eventSource.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+  // Handle event based on type
+};
     program.Send(evt)
   }
   if err := stream.Err(); err != nil {
@@ -59,63 +60,63 @@ go func() {
 
 ## Event Types and Handling
 
-The TUI processes 18 different SSE event types, each with specific handling logic:
+The Web interface processes 18 different SSE event types, each with specific handling logic:
 
 ### 1. `server.connected`
 
 - **Type**: `EventListResponseEventServerConnected`
 - **Purpose**: Indicates successful SSE connection establishment
 - **Properties**: Empty object `{}`
-- **TUI Handling**: No specific UI updates, used for connection confirmation
+- **Web Handling**: No specific UI updates, used for connection confirmation
 
 ### 2. `installation.updated`
 
 - **Type**: `EventListResponseEventInstallationUpdated`
 - **Purpose**: Notifies when OpenCode is updated
 - **Properties**: `{ version: string }`
-- **TUI Handling**: Shows success toast: "opencode updated to {version}, restart to apply"
+- **Web Handling**: Shows success toast: "opencode updated to {version}, restart to apply"
 
 ### 3. `ide.installed`
 
 - **Type**: `EventListResponseEventIdeInstalled`
 - **Purpose**: Notifies when IDE extension is installed
 - **Properties**: `{ ide: string }`
-- **TUI Handling**: Currently commented out, would show success toast
+- **Web Handling**: Shows success toast for IDE installation
 
 ### 4. `session.updated`
 
 - **Type**: `EventListResponseEventSessionUpdated`
 - **Purpose**: Updates session information
 - **Properties**: `{ info: Session }`
-- **TUI Handling**: Updates the current session if IDs match
+- **Web Handling**: Updates the current session if IDs match
 
 ### 5. `session.deleted`
 
 - **Type**: `EventListResponseEventSessionDeleted`
 - **Purpose**: Notifies when a session is deleted
 - **Properties**: `{ info: Session }`
-- **TUI Handling**: Clears current session and messages if deleted session matches current session
+- **Web Handling**: Clears current session and messages if deleted session matches current session
 
 ### 6. `session.compacted`
 
 - **Type**: `EventListResponseEventSessionCompacted`
 - **Purpose**: Notifies when a session is compacted
 - **Properties**: `{ sessionID: string }`
-- **TUI Handling**: Shows success toast if compaction affects current session
+- **Web Handling**: Shows success toast if compaction affects current session
 
 ### 7. `session.idle`
 
 - **Type**: `EventListResponseEventSessionIdle`
 - **Purpose**: Indicates session has become idle
 - **Properties**: `{ sessionID: string }`
-- **TUI Handling**: No specific UI updates currently
+- **Web Handling**: No specific UI updates currently
 
 ### 8. `session.error`
 
 - **Type**: `EventListResponseEventSessionError`
 - **Purpose**: Reports session errors
 - **Properties**: `{ error: ErrorUnion, sessionID?: string }`
-- **TUI Handling**: Shows error toast based on error type:
+- **Web Handling**: Shows error toast based on error type:
   - `ProviderAuthError`: "Provider error: {message}"
   - `UnknownError`: "{message}" with error name as title
   - `MessageOutputLengthError`: No specific handling
@@ -126,7 +127,7 @@ The TUI processes 18 different SSE event types, each with specific handling logi
 - **Type**: `EventListResponseEventMessageUpdated`
 - **Purpose**: Updates or adds a complete message
 - **Properties**: `{ info: MessageUnion }`
-- **TUI Handling**: Complex logic for updating existing messages or inserting new ones:
+- **Web Handling**: Complex logic for updating existing messages or inserting new ones:
   - Updates existing message if ID matches
   - Inserts new message in correct chronological order if not found
   - Maintains message order by ID comparison
@@ -136,14 +137,14 @@ The TUI processes 18 different SSE event types, each with specific handling logi
 - **Type**: `EventListResponseEventMessageRemoved`
 - **Purpose**: Removes a message from the session
 - **Properties**: `{ messageID: string, sessionID: string }`
-- **TUI Handling**: Removes message from current session if IDs match
+- **Web Handling**: Removes message from current session if IDs match
 
 ### 11. `message.part.updated`
 
 - **Type**: `EventListResponseEventMessagePartUpdated`
 - **Purpose**: Updates or adds a part of a message (streaming content)
 - **Properties**: `{ part: PartUnion }`
-- **TUI Handling**: Complex part management:
+- **Web Handling**: Complex part management:
   - Updates existing part if ID matches
   - Adds new part if not found
   - Handles different part types: TextPart, ReasoningPart, FilePart, ToolPart, StepStartPart, StepFinishPart
@@ -153,70 +154,70 @@ The TUI processes 18 different SSE event types, each with specific handling logi
 - **Type**: `EventListResponseEventMessagePartRemoved`
 - **Purpose**: Removes a part from a message
 - **Properties**: `{ messageID: string, partID: string, sessionID: string }`
-- **TUI Handling**: Removes specific part from message if IDs match
+- **Web Handling**: Removes specific part from message if IDs match
 
 ### 13. `permission.updated`
 
 - **Type**: `EventListResponseEventPermissionUpdated`
 - **Purpose**: Adds a new permission request
 - **Properties**: `{ id: string, sessionID: string, ... }`
-- **TUI Handling**: Adds permission to list, sets as current permission, blurs editor
+- **Web Handling**: Adds permission to list, sets as current permission, shows permission modal
 
 ### 14. `permission.replied`
 
 - **Type**: `EventListResponseEventPermissionReplied`
 - **Purpose**: Handles permission response
 - **Properties**: `{ permissionID: string, response: string, sessionID: string }`
-- **TUI Handling**: Removes permission from list, updates current permission if needed
+- **Web Handling**: Removes permission from list, updates current permission if needed
 
 ### 15. `file.edited`
 
 - **Type**: `EventListResponseEventFileEdited`
 - **Purpose**: Notifies when a file is edited
 - **Properties**: `{ file: string }`
-- **TUI Handling**: No specific UI updates currently
+- **Web Handling**: No specific UI updates currently
 
 ### 16. `file.watcher.updated`
 
 - **Type**: `EventListResponseEventFileWatcherUpdated`
 - **Purpose**: Notifies file system changes
 - **Properties**: `{ file: string, event: "add" | "change" | "unlink" }`
-- **TUI Handling**: No specific UI updates currently
+- **Web Handling**: No specific UI updates currently
 
 ### 17. `todo.updated`
 
 - **Type**: `EventListResponseEventTodoUpdated`
 - **Purpose**: Updates todo items for a session
 - **Properties**: `{ sessionID: string, todos: TodoItem[] }`
-- **TUI Handling**: No specific UI updates currently
+- **Web Handling**: No specific UI updates currently
 
 ### 18. `lsp.client.diagnostics`
 
 - **Type**: `EventListResponseEventLspClientDiagnostics`
 - **Purpose**: LSP diagnostics updates
 - **Properties**: `{ path: string, serverID: string }`
-- **TUI Handling**: No specific UI updates currently
+- **Web Handling**: No specific UI updates currently
 
 ## Event Processing Flow
 
-1. **Connection**: TUI connects to `/event` endpoint
+1. **Connection**: Web interface connects to `/event` endpoint
 2. **Initial Event**: Server sends `server.connected` event
 3. **Event Streaming**: Server streams all bus events as SSE messages
-4. **Event Reception**: TUI receives events in background goroutine
-5. **Event Dispatch**: Events sent to TUI program via `program.Send()`
-6. **Event Handling**: TUI processes events in `Update()` method based on type
+4. **Event Reception**: Web interface receives events via EventSource
+5. **Event Dispatch**: Events processed through React state management
+6. **Event Handling**: Web interface processes events based on type
 7. **UI Updates**: Events trigger appropriate UI changes (toasts, message updates, etc.)
 
 ## Message and Part Management
 
 ### Message Structure
 
-Messages in the TUI are stored as:
+Messages in the Web interface are stored as React state:
 
-```go
-type Message struct {
-  Info  opencode.MessageUnion // UserMessage or AssistantMessage
-  Parts []opencode.PartUnion  // TextPart, ReasoningPart, etc.
+```typescript
+interface Message {
+  info: MessageUnion; // UserMessage or AssistantMessage
+  parts: PartUnion[]; // TextPart, ReasoningPart, etc.
 }
 ```
 
@@ -231,7 +232,7 @@ type Message struct {
 
 ### Update Logic
 
-The TUI handles message and part updates with sophisticated logic:
+The Web interface handles message and part updates with sophisticated logic:
 
 1. **Message Updates**: Maintains chronological order by ID comparison
 2. **Part Updates**: Updates existing parts or appends new ones
@@ -240,7 +241,7 @@ The TUI handles message and part updates with sophisticated logic:
 
 ## Error Handling
 
-The TUI handles various error scenarios:
+The Web interface handles various error scenarios:
 
 - **Stream Errors**: Logged and sent to program for display
 - **Session Errors**: Displayed as error toasts with appropriate titles
@@ -272,7 +273,7 @@ To reproduce this SSE handling in a custom web client:
 2. **Parse Event Stream**: Handle SSE format with `event:` and `data:` fields
 3. **Event Type Detection**: Parse JSON and determine event type from `type` field
 4. **State Management**: Implement similar message/part storage and update logic
-5. **UI Updates**: Map TUI event handlers to web UI updates (DOM manipulation, state updates)
+5. **UI Updates**: Map event handlers to web UI updates (DOM manipulation, state updates)
 6. **Error Handling**: Implement appropriate error display and recovery mechanisms
 
 ## Key Implementation Details
@@ -281,11 +282,11 @@ To reproduce this SSE handling in a custom web client:
 
 The SDK uses union types to represent different event structures:
 
-```go
-type EventListResponse struct {
-  Properties interface{}           `json:"properties,required"`
-  Type       EventListResponseType `json:"type,required"`
-  union      EventListResponseUnion
+```typescript
+interface EventListResponse {
+  properties: any;
+  type: EventListResponseType;
+  // Union type for different event structures
 }
 ```
 
@@ -293,9 +294,9 @@ type EventListResponse struct {
 
 Messages are ordered by ID comparison, with newer messages having higher IDs:
 
-```go
-if existingID < newMessageID {
-  insertIndex = i + 1
+```typescript
+if (existingID < newMessageID) {
+  insertIndex = i + 1;
 }
 ```
 
@@ -303,4 +304,4 @@ if existingID < newMessageID {
 
 Parts within messages are managed as slices with index-based updates and insertions.
 
-This comprehensive event system enables real-time collaboration, live updates, and responsive user experience in the OpenCode TUI.
+This comprehensive event system enables real-time collaboration, live updates, and responsive user experience in the OpenCode Web interface.
