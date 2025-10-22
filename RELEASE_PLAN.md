@@ -335,23 +335,37 @@ jobs:
 ### Implementation Timeline
 
 #### Week 1: Foundation
-- [ ] Create `packages/script` package with version helpers.
-- [ ] Implement `script/build.ts` to assemble server release artifacts.
-- [ ] Update `package.json` workspace scripts.
-- [ ] Verify local release build produces expected tarball.
+- [x] Create `packages/script` package with version helpers.
+- [x] Implement `script/build.ts` to assemble server release artifacts.
+- [x] Update `package.json` workspace scripts.
+- [x] Verify local release build produces expected tarball (2025-10-22 via `OPENCODE_BUMP=patch OPENCODE_CHANNEL=latest bun run build:release`, yielding `release/opencode-web-server-v0.1.1.tar.gz`).
 
 #### Week 2: Automation
-- [ ] Implement `script/publish.ts` with changelog, version bump, and archive upload.
-- [ ] Add `.github/actions/setup-bun/action.yml` composite action.
-- [ ] Configure `.github/workflows/release.yml`.
-- [ ] Seed required GitHub secrets (only `GITHUB_TOKEN`).
+- [x] Implement `script/publish.ts` with changelog, version bump, and archive upload.
+- [x] Add `.github/actions/setup-bun/action.yml` composite action.
+- [x] Configure `.github/workflows/release.yml`.
+- [x] Seed required GitHub secrets (only `GITHUB_TOKEN`).
+  - Uses repository-provided `GITHUB_TOKEN`; ensure Actions permission for `contents: write`.
 - [ ] Dry-run release workflow on a non-production branch.
+  - Pending manual trigger: dispatch the workflow from a feature branch with `bump=patch`, temporarily set `OPENCODE_CHANNEL=preview`, and verify build logs without publishing.
 
 #### Week 3: Hardening
 - [ ] Configure GitHub Release template and verify artifact contents.
 - [ ] Document operator installation instructions alongside the release.
 - [ ] Establish rollback procedure (re-tag previous version and upload prior artifact).
 - [ ] Capture post-release validation steps (smoke test on fresh host).
+
+#### Week 4: Release Execution
+- [ ] Conduct release readiness review (publish script output, workflow inputs, release notes draft).
+- [ ] Trigger GitHub `release` workflow with agreed semantic bump and channel.
+- [ ] Monitor CI jobs, validate uploaded artifact checksum, and confirm tag alignment.
+- [ ] Announce release availability in maintainer channels and update CHANGELOG with final notes.
+
+#### Week 5: Post-Release Monitoring
+- [ ] Collect operator feedback and triage any reported regressions or installation issues.
+- [ ] Record download metrics, checksum confirmations, and workflow duration in the release log.
+- [ ] Schedule follow-up backlog grooming focused on automation gaps discovered during release.
+- [ ] Prep preview-channel experiment plan, including decision gates for future iterations.
 
 ### Security Considerations
 

@@ -12,3 +12,6 @@ ignores:
   - "src/hooks/useOpenCode.ts"
   - "src/app/index.tsx"
   - "src/app/_components/ui/pwa-reload-prompt.tsx"
+  - "script/**"
+  - "packages/script/**"
+  - "release/**"

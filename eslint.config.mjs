@@ -11,6 +11,7 @@ const eslintConfig = [
       "build/**",
       "src/routeTree.gen.ts",
       "index.ts",
+      "release/**",
     ],
   },
   ...tseslint.configs.recommended,
