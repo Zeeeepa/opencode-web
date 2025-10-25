@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: script/release.sh [--bump patch|minor|major] [--no-publish] [--otp CODE] [--tag NAME] [--no-tag] [--dev]
+Usage: script/release.sh [--bump patch|minor|major] [--no-publish] [--otp CODE] [--tag NAME] [--no-tag]
 
 Automates the OpenCode Web release flow:
   1. Aligns local package versions with the latest published version on npm
@@ -14,14 +14,10 @@ Automates the OpenCode Web release flow:
   6. Pushes commit and tag to origin
   7. Optionally creates a git tag (default: v<VERSION>)
 
-Options:
-  --dev           Publish to npm with 'dev' tag instead of 'latest', and push to dev branch
-
 Examples:
-  script/release.sh                       # patch bump, publish, push to master
+  script/release.sh                       # patch bump, publish, push
   script/release.sh --bump minor --no-publish
   script/release.sh --bump patch --otp 123456
-  script/release.sh --dev                 # patch bump, publish to @dev tag, push to dev branch
 EOF
 }
 
@@ -97,7 +93,6 @@ PUBLISH=1
 OTP=""
 TAG_NAME=""
 CREATE_TAG=1
-DEV_RELEASE=0
 TEMP_NPMRC=""
 ORIGINAL_NPM_CONFIG_USERCONFIG=${NPM_CONFIG_USERCONFIG-__UNSET__}
 ORIGINAL_NODE_AUTH_TOKEN=${NODE_AUTH_TOKEN-__UNSET__}
@@ -122,10 +117,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-tag)
       CREATE_TAG=0
-      shift
-      ;;
-    --dev)
-      DEV_RELEASE=1
       shift
       ;;
     -h|--help)
@@ -162,16 +153,10 @@ require_clean_tree
 ORIGINAL_HEAD=$(git rev-parse HEAD)
 
 CURRENT_VERSION=$(jq -r '.version' package.json)
+PUBLISHED_VERSION=$(npm view opencode-web version 2>/dev/null || echo "0.0.0")
 
-if [[ $DEV_RELEASE -eq 1 ]]; then
-  PUBLISHED_VERSION=$(npm view opencode-web@dev version 2>/dev/null || echo "0.0.0")
-  echo "Current repo version: $CURRENT_VERSION"
-  echo "Latest npm @dev version: ${PUBLISHED_VERSION:-<none>}"
-else
-  PUBLISHED_VERSION=$(npm view opencode-web version 2>/dev/null || echo "0.0.0")
-  echo "Current repo version: $CURRENT_VERSION"
-  echo "Latest npm version:  ${PUBLISHED_VERSION:-<none>}"
-fi
+echo "Current repo version: $CURRENT_VERSION"
+echo "Latest npm version:  ${PUBLISHED_VERSION:-<none>}"
 
 cmp=$(compare_versions "$CURRENT_VERSION" "$PUBLISHED_VERSION")
 if [[ $cmp -lt 0 ]]; then
@@ -261,11 +246,7 @@ if [[ $CREATE_TAG -eq 1 ]]; then
 fi
 
 if [[ $PUBLISH -eq 1 ]]; then
-  if [[ $DEV_RELEASE -eq 1 ]]; then
-    echo "Publishing opencode-web@$NEW_VERSION to npm with tag 'dev'..."
-  else
-    echo "Publishing opencode-web@$NEW_VERSION to npm..."
-  fi
+  echo "Publishing opencode-web@$NEW_VERSION to npm..."
   pushd packages/opencode-web >/dev/null
   if [[ -n "${NPM_TOKEN:-${NODE_AUTH_TOKEN:-}}" ]]; then
     TOKEN="${NPM_TOKEN:-${NODE_AUTH_TOKEN}}"
@@ -279,9 +260,6 @@ if [[ $PUBLISH -eq 1 ]]; then
     export NODE_AUTH_TOKEN="$TOKEN"
   fi
   PUBLISH_ARGS=(--access public)
-  if [[ $DEV_RELEASE -eq 1 ]]; then
-    PUBLISH_ARGS+=(--tag dev)
-  fi
   if [[ -n "$OTP" ]]; then
     PUBLISH_ARGS+=(--otp "$OTP")
   fi
@@ -291,13 +269,8 @@ else
   echo "INFO: Skipping npm publish (per --no-publish)."
 fi
 
-if [[ $DEV_RELEASE -eq 1 ]]; then
-  echo "Pushing commit to origin dev branch..."
-  git push origin HEAD:dev
-else
-  echo "Pushing commit to origin..."
-  git push origin HEAD:master
-fi
+echo "Pushing commit to origin..."
+git push origin HEAD:master
 
 if [[ $CREATE_TAG -eq 1 ]]; then
   echo "Pushing tag $TAG_NAME..."
@@ -320,20 +293,14 @@ else
 fi
 
 echo "Release v$NEW_VERSION complete."
-if [[ $DEV_RELEASE -eq 1 ]]; then
-  echo "   - Commit pushed to dev"
-  echo "   - Published to npm with tag: dev"
-  echo "   - Install with: bunx opencode-web@dev"
-else
-  echo "   - Commit pushed to master"
-  if [[ $PUBLISH -eq 1 ]]; then
-    echo "   - npm publish succeeded"
-  else
-    echo "   - npm publish skipped"
-  fi
-fi
+echo "   - Commit pushed to master"
 if [[ $CREATE_TAG -eq 1 ]]; then
   echo "   - Tag pushed: $TAG_NAME"
+fi
+if [[ $PUBLISH -eq 1 ]]; then
+  echo "   - npm publish succeeded"
+else
+  echo "   - npm publish skipped"
 fi
 
 trap - ERR

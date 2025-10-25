@@ -2,8 +2,7 @@ export interface Command {
   name: string;
   description: string;
   args?: string;
-  category: "session" | "model" | "theme" | "file" | "agent" | "other" | "custom";
-  custom?: boolean;
+  category: "session" | "model" | "theme" | "file" | "agent" | "other";
 }
 
 export const COMMANDS: Command[] = [
@@ -37,29 +36,26 @@ export const COMMANDS: Command[] = [
   { name: "exit", description: "Exit application", category: "other" },
 ];
 
-export function getCommandSuggestions(input: string, customCommands: Command[] = []): Command[] {
+export function getCommandSuggestions(input: string): Command[] {
   const trimmed = input.trim();
   if (!trimmed.startsWith("/")) return [];
 
   const query = trimmed.slice(1).toLowerCase();
-  const allCommands = [...COMMANDS, ...customCommands];
-  
-  if (!query) return allCommands;
+  if (!query) return COMMANDS;
 
-  return allCommands.filter(
+  return COMMANDS.filter(
     (cmd) =>
       cmd.name.toLowerCase().startsWith(query) ||
       cmd.description.toLowerCase().includes(query),
   );
 }
 
-export function completeCommand(input: string, customCommands: Command[] = []): string | null {
+export function completeCommand(input: string): string | null {
   const trimmed = input.trim();
   if (!trimmed.startsWith("/")) return null;
 
   const query = trimmed.slice(1).toLowerCase();
-  const allCommands = [...COMMANDS, ...customCommands];
-  const matches = allCommands.filter((cmd) =>
+  const matches = COMMANDS.filter((cmd) =>
     cmd.name.toLowerCase().startsWith(query),
   );
 
